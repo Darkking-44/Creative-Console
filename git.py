@@ -1,6 +1,6 @@
 # CC-TYPE: extension
-# CC-NAME: win
-# CC-DESCRIPTION: Ermöglicht das Ausführen von nativen PowerShell-Befehlen unter Windows.
+# CC-NAME: git
+# CC-DESCRIPTION: Native Git-Integration
 # CC-REQUIREMENTS: none
 
 import subprocess
