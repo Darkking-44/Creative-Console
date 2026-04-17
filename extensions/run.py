@@ -1,6 +1,6 @@
 # CC-TYPE: extension
 # CC-NAME: run
-# CC-DESCRIPTION: Autonomous Runner v3.8.4. Forced SDK inclusion and stable WinLibs link.
+# CC-DESCRIPTION: Autonomous Runner v3.8.5. w64devkit for C++ and vcvars64.bat for CUDA.
 
 import os
 import subprocess
@@ -23,7 +23,8 @@ def _get_bin_dir():
     if not d.exists(): d.mkdir(parents=True, exist_ok=True)
     return d
 
-def _find_msvc_cl_internal():
+def _get_vcvars_path():
+    """Finds the Visual Studio Developer Environment script needed for CUDA."""
     if platform.system() != "Windows": return None
     vswhere = r"C:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.exe"
     if os.path.exists(vswhere):
@@ -31,20 +32,18 @@ def _find_msvc_cl_internal():
             res = subprocess.run([vswhere, "-latest", "-property", "installationPath"], capture_output=True, text=True)
             install_path = res.stdout.strip()
             if install_path:
-                msvc_base = Path(install_path) / "VC/Tools/MSVC"
-                if msvc_base.exists():
-                    versions = sorted([d for d in msvc_base.iterdir() if d.is_dir()], reverse=True)
-                    if versions:
-                        cl_bin = versions[0] / "bin/Hostx64/x64"
-                        if cl_bin.exists(): return str(cl_bin)
+                vcvars = Path(install_path) / "VC" / "Auxiliary" / "Build" / "vcvars64.bat"
+                if vcvars.exists(): return str(vcvars)
         except: pass
     return None
 
 def _update_env_paths_internal():
     bin_dir = _get_bin_dir()
-    extra_paths = [str(bin_dir / "mingw64" / "bin"), str(bin_dir / "jdk" / "bin")]
-    cl_path = _find_msvc_cl_internal()
-    if cl_path: extra_paths.append(cl_path)
+    extra_paths = [
+        str(bin_dir / "w64devkit" / "bin"), # New stable C++ toolchain
+        str(bin_dir / "mingw64" / "bin"),   # Legacy fallback
+        str(bin_dir / "jdk" / "bin")
+    ]
     for p in extra_paths:
         if os.path.exists(p) and p not in os.environ["PATH"]:
             os.environ["PATH"] = p + os.pathsep + os.environ["PATH"]
@@ -75,10 +74,10 @@ def handle_run(args, console):
     if not file_path.exists(): return f"{C.ERROR}File not found.{C.RESET}"
     ext = file_path.suffix.lower()
 
+    # Stable w64devkit link for C++
     if ext in [".cpp", ".c"] and not shutil.which("g++"):
-        # Stable Direct Link
-        url = "https://github.com/brechtsanders/winlibs_mingw/releases/download/13.2.0-11.0.1-msvcrt-r1/winlibs-x86_64-posix-seh-gcc-13.2.0-mingw-w64msvcrt-11.0.1-r1.zip"
-        _download_and_extract(url, "mingw")
+        url = "https://github.com/skeeto/w64devkit/releases/download/v1.21.0/w64devkit-1.21.0.zip"
+        _download_and_extract(url, "w64devkit")
         
     _update_env_paths_internal()
     return _execute(file_path, ext)
@@ -101,15 +100,17 @@ def _execute(p, ext):
             subprocess.run(["java", "-cp", str(p.parent), p.stem], stdout=None, stderr=None)
         elif ext in [".cpp", ".c"]:
             out = p.with_suffix(".exe")
-            # Compile with OpenCL if possible
             subprocess.run(f'g++ "{p}" -o "{out}" -lOpenCL', shell=True, check=True)
             subprocess.run([str(out.absolute())], stdout=None, stderr=None)
         elif ext == ".cu":
             out = p.with_suffix(".exe")
-            cl_path = _find_msvc_cl_internal()
-            # Der Trick: Wir sagen NVCC direkt, wo cl.exe liegt
-            cc_bin = f'--compiler-bindir "{cl_path}"' if cl_path else ""
-            cmd = f'nvcc {cc_bin} -m64 "{p}" -o "{out}" -allow-unsupported-compiler'
+            vcvars = _get_vcvars_path()
+            # Der ultimative Fix: Lade die VS-Umgebung (vcvars) und führe dann nvcc aus
+            if vcvars:
+                cmd = f'call "{vcvars}" && nvcc -m64 "{p}" -o "{out}" -allow-unsupported-compiler'
+            else:
+                cmd = f'nvcc -m64 "{p}" -o "{out}" -allow-unsupported-compiler'
+            
             subprocess.run(cmd, shell=True, check=True)
             subprocess.run([str(out.absolute())], stdout=None, stderr=None)
         return ""
@@ -120,4 +121,4 @@ def setup_all(args, console): return "Check done."
 
 def on_startup(console):
     _update_env_paths_internal()
-    print(f"  {C.SUCCESS}Runner v3.8.4 (Ultra-Stable) ready.{C.RESET}")
+    print(f"  {C.SUCCESS}Runner v3.8.5 (VCVARS Update) ready.{C.RESET}")
