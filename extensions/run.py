@@ -1,6 +1,6 @@
 # CC-TYPE: extension
 # CC-NAME: run
-# CC-DESCRIPTION: Universal runner and auto-installer for C++, Java, Rust, CUDA, and Arduino.
+# CC-DESCRIPTION: Universal runner v3.2 - Fixed Path, Error handling and Auto-Installer.
 
 import os
 import subprocess
@@ -15,7 +15,7 @@ def provides_commands():
     return {
         "run": {
             "handler": handle_run,
-            "description": "Compiles and executes files based on extension. Auto-installs missing tools."
+            "description": "Compiles and executes files. Auto-installs missing compilers."
         }
     }
 
@@ -24,7 +24,7 @@ def handle_run(args, console):
     if not args:
         return f"{C.ERROR}Usage: run <filepath>{C.RESET}"
 
-    # Clean path from quotes and whitespace
+    # Path Sanitization: Join args for spaces and strip quotes
     raw_path = " ".join(args).strip().strip('"').strip("'")
     file_path = Path(raw_path)
     
@@ -33,16 +33,25 @@ def handle_run(args, console):
 
     ext = file_path.suffix.lower()
     
-    # Pre-check dependencies
+    # Pre-check dependencies and compilers
     if ext in [".cpp", ".c"] and not shutil.which("g++"):
         _install_tool("g++")
     elif ext == ".java" and not shutil.which("javac"):
         _install_tool("java")
     elif ext == ".rs" and not shutil.which("rustc"):
         _install_tool("rust")
-    elif ext == ".cu" and not shutil.which("nvcc"):
-        if _has_nvidia(): _install_tool("cuda")
-        else: return f"{C.ERROR}No NVIDIA GPU detected for CUDA.{C.RESET}"
+    elif ext == ".cu":
+        if not shutil.which("nvcc"):
+            # Try standard NVIDIA path if not in global PATH
+            default_cuda = Path(r"C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.4\bin\nvcc.exe")
+            if default_cuda.exists():
+                os.environ["PATH"] += os.pathsep + str(default_cuda.parent)
+            else:
+                if _has_nvidia():
+                    _install_tool("cuda")
+                    return f"{C.WARN}Status: NVCC not found. Installer launched.{C.RESET}"
+                else:
+                    return f"{C.ERROR}No NVIDIA GPU detected for CUDA.{C.RESET}"
     elif ext == ".ino" and not shutil.which("arduino-cli"):
         _install_tool("arduino")
 
@@ -78,56 +87,56 @@ def _install_tool(tool):
     
     print(f"  {C.SUCCESS}Action: Follow instructions and restart the console.{C.RESET}")
 
+# --- Execution Handlers ---
+
 def _run_py(p):
-    """Executes Python scripts interactively."""
     print(f"  {C.MUTED}Running Python: {p.name}{C.RESET}")
     subprocess.run(["python", str(p)], stdout=None, stderr=None)
     return ""
 
 def _run_java(p):
-    """Compiles and runs Java files. Supports GUI windows."""
     with Spinner(f"Compiling {p.name}"):
         res = subprocess.run(["javac", str(p)], capture_output=True, text=True)
-        if res.returncode != 0: return f"{C.ERROR}Java Error:\n{res.stderr}{C.RESET}"
+        if res.returncode != 0: return f"{C.ERROR}Java Error:{C.RESET}\n{res.stderr}"
     
     print(f"  {C.PURPLE}Launching JVM...{C.RESET}")
-    # Run without capturing to allow GUI windows to spawn correctly
     subprocess.run(["java", p.stem], stdout=None, stderr=None)
     return f"  {C.MUTED}--- Process finished ---{C.RESET}"
 
 def _run_cpp(p):
-    """Compiles and runs C++ files."""
     out = p.stem + (".exe" if platform.system() == "Windows" else "")
     with Spinner(f"Compiling {p.name}"):
-        res = subprocess.run(["g++", str(p), "-o", out], capture_output=True, text=True)
-        if res.returncode != 0: return f"{C.ERROR}C++ Error:\n{res.stderr}{C.RESET}"
+        # Use shell=True for native compilers on Windows to catch environment paths
+        res = subprocess.run(f'g++ "{p}" -o "{out}"', shell=True, capture_output=True, text=True)
+        if res.returncode != 0: return f"{C.ERROR}C++ Error:{C.RESET}\n{res.stderr}"
     
     exec_cmd = [f"./{out}" if platform.system() != "Windows" else out]
     subprocess.run(exec_cmd, stdout=None, stderr=None)
     return f"  {C.MUTED}--- Process finished ---{C.RESET}"
 
 def _run_rust(p):
-    """Compiles and runs Rust files."""
     with Spinner(f"Compiling Rust {p.name}"):
         res = subprocess.run(["rustc", str(p)], capture_output=True, text=True)
-        if res.returncode != 0: return f"{C.ERROR}Rust Error:\n{res.stderr}{C.RESET}"
+        if res.returncode != 0: return f"{C.ERROR}Rust Error:{C.RESET}\n{res.stderr}"
     
     exec_cmd = ["./" + p.stem if platform.system() != "Windows" else p.stem + ".exe"]
     subprocess.run(exec_cmd, stdout=None, stderr=None)
     return ""
 
 def _run_cuda(p):
-    """Compiles and runs CUDA files using NVCC."""
     out = p.stem + (".exe" if platform.system() == "Windows" else "")
-    with Spinner(f"Building CUDA {p.name}"):
-        res = subprocess.run(["nvcc", str(p), "-o", out], capture_output=True, text=True)
-        if res.returncode != 0: return f"{C.ERROR}CUDA Error:\n{res.stderr}{C.RESET}"
+    with Spinner(f"NVCC Building {p.name}"):
+        # Shell=True is critical for NVCC to find Host-Compilers (Visual Studio)
+        res = subprocess.run(f'nvcc "{p}" -o "{out}"', shell=True, capture_output=True, text=True)
     
+    if res.returncode != 0:
+        return f"{C.ERROR}CUDA Compilation Error:{C.RESET}\n{res.stderr}\n{res.stdout}"
+    
+    print(f"  {C.PURPLE}Executing GPU Binary...{C.RESET}")
     subprocess.run([str(Path(out).absolute())], stdout=None, stderr=None)
-    return ""
+    return f"  {C.MUTED}--- CUDA Process finished ---{C.RESET}"
 
 def _run_arduino(p):
-    """Handles Arduino upload with COM port selection."""
     board_data = subprocess.run(["arduino-cli", "board", "list"], capture_output=True, text=True).stdout
     ports = re.findall(r"(COM\d+|/dev/tty[a-zA-Z0-9]+)", board_data)
     if not ports: return f"{C.ERROR}No board found.{C.RESET}"
@@ -138,7 +147,7 @@ def _run_arduino(p):
     try:
         idx = int(input(f"  {C.CYAN}Select Index: {C.RESET}"))
         selected_port = ports[idx]
-    except: return f"{C.ERROR}Invalid input.{C.RESET}"
+    except: return f"{C.ERROR}Invalid selection.{C.RESET}"
     
     fqbn = input(f"  {C.CYAN}Enter FQBN: {C.RESET}").strip()
     with Spinner("Uploading"):
@@ -146,9 +155,8 @@ def _run_arduino(p):
     return "Upload complete."
 
 def _has_nvidia():
-    """Check for NVIDIA GPU presence."""
     return shutil.which("nvidia-smi") is not None
 
 def on_startup(console):
     """Initialize extension."""
-    print(f"  {C.SUCCESS}Runner-Engine v3.1 online (GUI-Support enabled).{C.RESET}")
+    print(f"  {C.SUCCESS}Runner-Engine v3.2 (Fix-Patch) online.{C.RESET}")
