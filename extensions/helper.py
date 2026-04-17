@@ -1,74 +1,70 @@
 # CC-TYPE: extension
 # CC-NAME: typo_fixer
-# CC-DESCRIPTION: Automatically corrects command typos using Fuzzy Matching.
+# CC-DESCRIPTION: Fuzzy logic hook to fix typos before command dispatch.
+
+import utils
+from ui import C
 
 def on_input(line):
     """
-    Hooks into the input stream to catch and fix typos before execution.
-    Note: 'console' is injected globally by the ExtensionHost at runtime.
+    Standard Hook: Intercepts the raw input string.
+    If the command is unknown, it attempts to find the nearest match.
     """
     if not line or not line.strip():
         return line
 
     parts = line.split()
-    cmd_raw = parts[0].lower()
+    raw_cmd = parts[0].lower()
     args = parts[1:] if len(parts) > 1 else []
 
-    # Use the ansi_strip utility from the engine to clean input
-    from utils import ansi_strip
-    clean_cmd = ansi_strip(cmd_raw)
+    # Clean the command name from any ANSI residue
+    clean_cmd = utils.ansi_strip(raw_cmd)
 
-    # Standard built-in commands defined in main.py
+    # Accessing the global console object injected by ExtensionHost
+    # We define built-ins and fetch registered commands
     built_ins = [
-        "help", "exit", "quit", "config", "reset", "agent-mode",
-        "pull", "register-api-key", "command-list", "feature-list", "feature-status"
+        "help", "exit", "quit", "config", "reset", "agent-mode", 
+        "pull", "register-api-key", "command-list", "feature-list"
     ]
+    
+    # Combined list of every valid trigger in the engine
+    all_valid = built_ins + list(console.commands.keys()) + list(console.ext_cmds.keys())
 
-    # Access the actual command registries from the injected console object
-    # global console is used here because the engine injects it into the module dict
-    try:
-        all_valid = built_ins + list(console.commands.keys()) + list(console.ext_cmds.keys())
-    except NameError:
-        # Fallback if extension is tested outside of the engine
-        return line
-
+    # Do nothing if the command is already recognized
     if clean_cmd in all_valid:
         return line
 
-    # Fuzzy matching: Find the closest command within a distance of 2 characters
+    # Fuzzy matching search
     best_match = None
-    min_distance = 3
+    min_dist = 3  # Tolerance threshold
 
     for valid in all_valid:
         dist = _levenshtein(clean_cmd, valid)
-        if dist < min_distance:
-            min_distance = dist
+        if dist < min_dist:
+            min_dist = dist
             best_match = valid
 
-    # If a close match is found, replace the command and notify the user
+    # Auto-correction if a match is close enough
     if best_match:
-        from ui import C
-        new_line = " ".join([best_match] + args)
-        # We print directly to avoid double-processing the output hook
+        # Inform the user through the UI
         print(f"  {C.MUTED}ℹ Did you mean '{C.CYAN}{best_match}{C.MUTED}'? Correcting...{C.RESET}")
-        return new_line
+        return " ".join([best_match] + args)
 
     return line
 
-
 def _levenshtein(s1, s2):
-    """Calculates the Levenshtein distance between two strings."""
-    if len(s1) < len(s2):
-        return _levenshtein(s2, s1)
-    if not s2:
-        return len(s1)
-    previous_row = range(len(s2) + 1)
+    """Calculates Levenshtein distance to find the closest string match."""
+    if len(s1) < len(s2): return _levenshtein(s2, s1)
+    if not s2: return len(s1)
+    prev_row = range(len(s2) + 1)
     for i, c1 in enumerate(s1):
-        current_row = [i + 1]
+        curr_row = [i + 1]
         for j, c2 in enumerate(s2):
-            insertions = previous_row[j + 1] + 1
-            deletions = current_row[j] + 1
-            substitutions = previous_row[j] + (c1 != c2)
-            current_row.append(min(insertions, deletions, substitutions))
-        previous_row = current_row
-    return previous_row[-1]
+            sub = prev_row[j] + (c1 != c2)
+            curr_row.append(min(prev_row[j+1]+1, curr_row[j]+1, sub))
+        prev_row = curr_row
+    return prev_row[-1]
+
+def provides_commands():
+    """Returns empty dict as this extension only provides a background hook."""
+    return {}
