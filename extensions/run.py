@@ -1,6 +1,6 @@
 # CC-TYPE: extension
 # CC-NAME: run
-# CC-DESCRIPTION: Autonomous Runner v3.8.3. Fixing 404 Links and CUDA Host-Compiler environment.
+# CC-DESCRIPTION: Autonomous Runner v3.8.4. Forced SDK inclusion and stable WinLibs link.
 
 import os
 import subprocess
@@ -42,22 +42,12 @@ def _find_msvc_cl_internal():
 
 def _update_env_paths_internal():
     bin_dir = _get_bin_dir()
-    extra_paths = [
-        str(bin_dir / "mingw64" / "bin"), 
-        str(bin_dir / "jdk" / "bin")
-    ]
+    extra_paths = [str(bin_dir / "mingw64" / "bin"), str(bin_dir / "jdk" / "bin")]
     cl_path = _find_msvc_cl_internal()
     if cl_path: extra_paths.append(cl_path)
     for p in extra_paths:
         if os.path.exists(p) and p not in os.environ["PATH"]:
             os.environ["PATH"] = p + os.pathsep + os.environ["PATH"]
-
-def _progress_bar(current, total, bar_length=30):
-    fraction = current / total
-    arrow = int(fraction * bar_length - 1) * "=" + ">"
-    padding = int(bar_length - len(arrow)) * " "
-    percent = int(fraction * 100)
-    print(f"\r  Download: [{C.SUCCESS}{arrow}{padding}{C.RESET}] {percent}% ({current//(1024**2)}MB / {total//(1024**2)}MB)", end="")
 
 def _download_with_progress(url, filename):
     path = _get_bin_dir() / filename
@@ -67,12 +57,10 @@ def _download_with_progress(url, filename):
             total = int(resp.info().get('Content-Length').strip())
             current = 0
             with open(path, 'wb') as f:
-                while True:
-                    chunk = resp.read(1024 * 512)
-                    if not chunk: break
+                while chunk := resp.read(1024 * 512):
                     f.write(chunk)
                     current += len(chunk)
-                    _progress_bar(current, total)
+                    print(f"\r  Downloading: {int(current/total*100)}%", end="")
         print("\n")
         return path
     except Exception as e:
@@ -88,19 +76,15 @@ def handle_run(args, console):
     ext = file_path.suffix.lower()
 
     if ext in [".cpp", ".c"] and not shutil.which("g++"):
-        # New, more stable link for WinLibs MinGW
-        url = "https://github.com/brechtsanders/winlibs_mingw/releases/download/13.2.0posix-17.0.6-msvcrt-r5/winlibs-x86_64-posix-seh-gcc-13.2.0-mingw-w64msvcrt-11.0.1-r5.zip"
+        # Stable Direct Link
+        url = "https://github.com/brechtsanders/winlibs_mingw/releases/download/13.2.0-11.0.1-msvcrt-r1/winlibs-x86_64-posix-seh-gcc-13.2.0-mingw-w64msvcrt-11.0.1-r1.zip"
         _download_and_extract(url, "mingw")
         
-    if ext == ".java" and not shutil.which("javac"):
-        url = "https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.2%2B13/OpenJDK21U-jdk_x64_windows_hotspot_21.0.2_13.zip"
-        _download_and_extract(url, "jdk")
-
     _update_env_paths_internal()
     return _execute(file_path, ext)
 
 def _download_and_extract(url, name):
-    print(f"  {C.WARN}{name.upper()} missing. Setup starting...{C.RESET}")
+    print(f"  {C.WARN}{name.upper()} setup starting...{C.RESET}")
     zip_p = _download_with_progress(url, f"{name}.zip")
     if zip_p:
         with Spinner(f"Extracting {name}"):
@@ -117,13 +101,15 @@ def _execute(p, ext):
             subprocess.run(["java", "-cp", str(p.parent), p.stem], stdout=None, stderr=None)
         elif ext in [".cpp", ".c"]:
             out = p.with_suffix(".exe")
-            # Using -lOpenCL as standard for your tests
+            # Compile with OpenCL if possible
             subprocess.run(f'g++ "{p}" -o "{out}" -lOpenCL', shell=True, check=True)
             subprocess.run([str(out.absolute())], stdout=None, stderr=None)
         elif ext == ".cu":
             out = p.with_suffix(".exe")
-            # Added -m64 to fix "Unsupported OS" and -allow-unsupported-compiler
-            cmd = f'nvcc -m64 "{p}" -o "{out}" -allow-unsupported-compiler'
+            cl_path = _find_msvc_cl_internal()
+            # Der Trick: Wir sagen NVCC direkt, wo cl.exe liegt
+            cc_bin = f'--compiler-bindir "{cl_path}"' if cl_path else ""
+            cmd = f'nvcc {cc_bin} -m64 "{p}" -o "{out}" -allow-unsupported-compiler'
             subprocess.run(cmd, shell=True, check=True)
             subprocess.run([str(out.absolute())], stdout=None, stderr=None)
         return ""
@@ -134,4 +120,4 @@ def setup_all(args, console): return "Check done."
 
 def on_startup(console):
     _update_env_paths_internal()
-    print(f"  {C.SUCCESS}Runner v3.8.3 (Tank-Edition) ready.{C.RESET}")
+    print(f"  {C.SUCCESS}Runner v3.8.4 (Ultra-Stable) ready.{C.RESET}")
