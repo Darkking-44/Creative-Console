@@ -1,29 +1,43 @@
 # CC-TYPE: extension
-# CC-NAME: helper
-# CC-DESCRIPTION: Fuzzy Matching
+# CC-NAME: typo_fixer
+# CC-DESCRIPTION: Automatically corrects command typos using Fuzzy Matching.
 
 def on_input(line):
-    """Checks if the command has a typo and fixes it on the fly."""
-    if not line.strip(): return line
-    
+    """
+    Hooks into the input stream to catch and fix typos before execution.
+    Note: 'console' is injected globally by the ExtensionHost at runtime.
+    """
+    if not line or not line.strip():
+        return line
+
     parts = line.split()
-    cmd = parts[0].lower()
+    cmd_raw = parts[0].lower()
     args = parts[1:] if len(parts) > 1 else []
 
-    # Get all available commands from the console
-    from main import ansi_strip
-    clean_cmd = ansi_strip(cmd)
-    
-    # List of all valid commands
-    built_ins = ["help", "exit", "config", "reset", "agent-mode", "pull", "feature-list"]
-    all_valid = built_ins + list(console.commands.keys()) + list(console.ext_cmds.keys())
+    # Use the ansi_strip utility from the engine to clean input
+    from utils import ansi_strip
+    clean_cmd = ansi_strip(cmd_raw)
+
+    # Standard built-in commands defined in main.py
+    built_ins = [
+        "help", "exit", "quit", "config", "reset", "agent-mode",
+        "pull", "register-api-key", "command-list", "feature-list", "feature-status"
+    ]
+
+    # Access the actual command registries from the injected console object
+    # global console is used here because the engine injects it into the module dict
+    try:
+        all_valid = built_ins + list(console.commands.keys()) + list(console.ext_cmds.keys())
+    except NameError:
+        # Fallback if extension is tested outside of the engine
+        return line
 
     if clean_cmd in all_valid:
         return line
 
-    # Find the best match
+    # Fuzzy matching: Find the closest command within a distance of 2 characters
     best_match = None
-    min_distance = 3 # Max errors allowed (1-2 characters)
+    min_distance = 3
 
     for valid in all_valid:
         dist = _levenshtein(clean_cmd, valid)
@@ -31,18 +45,23 @@ def on_input(line):
             min_distance = dist
             best_match = valid
 
+    # If a close match is found, replace the command and notify the user
     if best_match:
         from ui import C
         new_line = " ".join([best_match] + args)
-        print(f"  {C.MUTED}ℹ Meinten Sie '{C.CYAN}{best_match}{C.MUTED}'? Korrigiere...{C.RESET}")
+        # We print directly to avoid double-processing the output hook
+        print(f"  {C.MUTED}ℹ Did you mean '{C.CYAN}{best_match}{C.MUTED}'? Correcting...{C.RESET}")
         return new_line
 
     return line
 
+
 def _levenshtein(s1, s2):
-    """Calculates the edit distance between two strings."""
-    if len(s1) < len(s2): return _levenshtein(s2, s1)
-    if not s2: return len(s1)
+    """Calculates the Levenshtein distance between two strings."""
+    if len(s1) < len(s2):
+        return _levenshtein(s2, s1)
+    if not s2:
+        return len(s1)
     previous_row = range(len(s2) + 1)
     for i, c1 in enumerate(s1):
         current_row = [i + 1]

@@ -1,54 +1,64 @@
 # CC-TYPE: extension
 # CC-NAME: ollama_manager
-# CC-DESCRIPTION: Automatisches Modell-Setup & Management für Ollama.
-# CC-REQUIREMENTS: requests
+# CC-DESCRIPTION: Automates Ollama model installation and management.
 
 import subprocess
 import shutil
-import requests
 from ui import C, Spinner
 
 
-def on_startup(console):
+def on_startup(c):
+    """
+    Check for Ollama installation and prompt for model setup.
+    'c' is the CreativeConsal instance passed during startup.
+    """
     if not shutil.which("ollama"):
-        ans = input(f"  {C.WARN}Ollama nicht gefunden. Installieren? (y/N): {C.RESET}").lower()
-        if ans in ("y", "j"):
-            print("  Bitte installiere Ollama von https://ollama.com und starte die Konsole neu.")
         return
 
-    # Automatischer Setup-Vibe
-    ans = input(f"\n  {C.CYAN}Ollama Setup:{C.RESET} GPU-Modell (Qwen2.5:32B) & CPU-Modell laden? (y/N): ").lower()
-    if ans in ("y", "j"):
-        _pull_model("qwen2.5:32b", console)
-        _pull_model("llama3.2:1b", console)
-    else:
-        ans_other = input(f"  {C.CYAN}❯{C.RESET} Ein anderes Modell auswählen? (y/N): ").lower()
-        if ans_other in ("y", "j"):
-            m = input(f"  {C.CYAN}❯{C.RESET} Modellname: ").strip()
-            if m: _pull_model(m, console)
+    print(f"\n  {C.CYAN}🦙 Ollama Manager Active{C.RESET}")
+    try:
+        # Prompt user for recommended model batch
+        ans = input(f"  Setup recommended models? (GPU: Qwen2.5:32B / CPU: Llama3.2:1B) (y/N): ").lower()
+        if ans in ("y", "j", "yes"):
+            _smart_pull("qwen2.5:32b")
+            _smart_pull("llama3.2:1b")
+    except (EOFError, KeyboardInterrupt):
+        return
 
 
-def _pull_model(name, console):
-    print(f"  {C.MUTED}Lade {name}...{C.RESET}")
-    # Nutzt den Spinner aus deiner ui.py
-    with Spinner(f"Pulling {name}"):
-        subprocess.run(["ollama", "pull", name], capture_output=True)
-    print(f"  {C.SUCCESS}✓ {name} bereit.{C.RESET}")
+def _smart_pull(model_name):
+    """Internal helper to pull models using the engine's built-in Spinner."""
+    print(f"  {C.MUTED}Preparing to fetch {model_name}...{C.RESET}")
+    try:
+        with Spinner(f"Pulling {model_name}"):
+            # Execute native ollama command
+            subprocess.run(["ollama", "pull", model_name], capture_output=True, check=True)
+        print(f"  {C.SUCCESS}✓ {model_name} is ready.{C.RESET}")
+    except Exception as e:
+        print(f"  {C.ERROR}✗ Failed to pull {model_name}: {e}{C.RESET}")
 
 
 def provides_commands():
+    """Expose management commands to the CreativeConsal instance."""
     return {
         "ollama": {
-            "handler": list_ollama,
-            "description": "Zeigt installierte Modelle und erlaubt Installationen."
+            "handler": cmd_ollama_list,
+            "description": "List models or install new ones (usage: ollama install <name>)"
         }
     }
 
 
-def list_ollama(args, console):
+def cmd_ollama_list(args, console_inst):
+    """Handle command execution logic."""
     if args and args[0] == "install":
-        _pull_model(args[1], console)
-        return f"Modell {args[1]} installiert."
+        if len(args) < 2:
+            return "Usage: ollama install <model_name>"
+        _smart_pull(args[1])
+        return f"Completed installation of {args[1]}"
 
-    res = subprocess.run(["ollama", "list"], capture_output=True, text=True)
-    return f"\n{C.HEADING}── INSTALLIERTE MODELLE ──{C.RESET}\n{res.stdout}"
+    try:
+        # Get list of local models
+        res = subprocess.run(["ollama", "list"], capture_output=True, text=True)
+        return f"\n{C.HEADING}── OLLAMA MODELS ──{C.RESET}\n{res.stdout}"
+    except:
+        return "Error: Ollama service unavailable."
