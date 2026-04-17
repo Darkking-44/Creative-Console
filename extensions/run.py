@@ -1,78 +1,80 @@
 # CC-TYPE: extension
 # CC-NAME: run
-# CC-DESCRIPTION: Global Runner v3.3 - Smart Path Discovery and Auto-Installer.
+# CC-DESCRIPTION: Portable Runner Engine. Auto-installs standalone compilers into local data dir.
 
 import os
 import subprocess
 import shutil
 import platform
-import re
+import zipfile
+import urllib.request
 from pathlib import Path
 from ui import C, Spinner
+from utils import feat_data_dir
 
 def provides_commands():
-    """Registers the 'run' command to the console."""
     return {
         "run": {
             "handler": handle_run,
-            "description": "Smart compiler & runner. Auto-detects paths for CUDA, Java, C++."
+            "description": "Smart runner with auto-installing portable toolchain."
         }
     }
 
-def _smart_path_discovery():
-    """
-    Scans default installation directories on Windows to find compilers 
-    and adds them to the current process PATH dynamically.
-    """
-    if platform.system() != "Windows":
-        return
+def _get_bin_dir():
+    """Returns the local directory where all compilers are stored."""
+    d = feat_data_dir() / "bin"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
 
-    # 1. Search for CUDA (nvcc)
-    if not shutil.which("nvcc"):
-        base_cuda = Path(r"C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA")
-        if base_cuda.exists():
-            # Find the highest version folder (e.g., v12.4)
-            versions = sorted([d for d in base_cuda.iterdir() if d.is_dir()], reverse=True)
-            if versions:
-                bin_path = versions[0] / "bin"
-                if bin_path.exists():
-                    os.environ["PATH"] += os.pathsep + str(bin_path)
+def _update_env_path():
+    """Adds local bin directories to the current process PATH."""
+    bin_dir = _get_bin_dir()
+    # Add various subfolders to path (e.g. mingw64/bin)
+    paths_to_add = [
+        str(bin_dir / "mingw64" / "bin"),
+        str(bin_dir / "jdk" / "bin"),
+        str(bin_dir / "arduino-cli")
+    ]
+    for p in paths_to_add:
+        if p not in os.environ["PATH"] and os.path.exists(p):
+            os.environ["PATH"] = p + os.pathsep + os.environ["PATH"]
 
-    # 2. Search for MSVC (cl.exe - critical for CUDA)
-    if not shutil.which("cl.exe"):
-        vs_paths = [
-            r"C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC",
-            r"C:\Program Files (x86)\Microsoft Visual Studio\2019\Community\VC\Tools\MSVC",
-            r"C:\Program Files\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC"
-        ]
-        for v_path in vs_paths:
-            p = Path(v_path)
-            if p.exists():
-                versions = sorted([d for d in p.iterdir() if d.is_dir()], reverse=True)
-                if versions:
-                    # Target x64 compiler binary
-                    cl_bin = versions[0] / "bin" / "Hostx64" / "x64"
-                    if cl_bin.exists():
-                        os.environ["PATH"] += os.pathsep + str(cl_bin)
-                        break
+def _download_and_extract(url, target_name):
+    """Downloads a zip and extracts it to the local bin dir."""
+    bin_dir = _get_bin_dir()
+    zip_path = bin_dir / f"{target_name}.zip"
+    
+    print(f"  {C.CYAN}Downloading {target_name} package...{C.RESET}")
+    urllib.request.urlretrieve(url, zip_path)
+    
+    print(f"  {C.CYAN}Extracting files...{C.RESET}")
+    with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+        zip_ref.extractall(bin_dir)
+    
+    os.remove(zip_path)
+    print(f"  {C.SUCCESS}✓ {target_name} installed locally.{C.RESET}")
 
-    # 3. Search for MinGW/G++ (C++)
-    if not shutil.which("g++"):
-        mingw_paths = [r"C:\msys64\mingw64\bin", r"C:\MinGW\bin"]
-        for m in mingw_paths:
-            if os.path.exists(m):
-                os.environ["PATH"] += os.pathsep + m
-                break
+def _ensure_compiler(ext):
+    """Checks if compiler exists locally or on system; installs locally if missing."""
+    _update_env_path()
+    
+    if ext in [".cpp", ".c"] and not shutil.which("g++"):
+        print(f"  {C.WARN}C++ Compiler missing.{C.RESET}")
+        # Link to a portable MinGW build
+        url = "https://github.com/niXman/mingw-builds-binaries/releases/download/13.1.0-rt_v11-rev1/x86_64-13.1.0-release-posix-seh-msvcrt-rt_v11-rev1.7z"
+        print(f"  {C.ERROR}Please install MinGW manually to {feat_data_dir()}/bin/mingw64 or use system compiler.{C.RESET}")
+        # Note: 7z extraction in Python is complex without extra libs, usually we prompt or use simple zips.
+    
+    elif ext == ".java" and not shutil.which("javac"):
+        print(f"  {C.WARN}Java JDK missing. Installing portable version...{C.RESET}")
+        # Example URL for a portable JDK zip
+        url = "https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.2%2B13/OpenJDK21U-jdk_x64_windows_hotspot_21.0.2_13.zip"
+        _download_and_extract(url, "jdk")
 
 def handle_run(args, console):
-    """Main execution entry point."""
     if not args:
         return f"{C.ERROR}Usage: run <filepath>{C.RESET}"
 
-    # Auto-discover paths before execution
-    _smart_path_discovery()
-
-    # Clean path from quotes and whitespace
     raw_path = " ".join(args).strip().strip('"').strip("'")
     file_path = Path(raw_path)
     
@@ -80,106 +82,51 @@ def handle_run(args, console):
         return f"{C.ERROR}File not found: {file_path.absolute()}{C.RESET}"
 
     ext = file_path.suffix.lower()
-    
-    # Auto-Installer Checks
-    if ext in [".cpp", ".c"] and not shutil.which("g++"):
-        _install_tool("g++")
-    elif ext == ".java" and not shutil.which("javac"):
-        _install_tool("java")
-    elif ext == ".cu":
-        if not shutil.which("nvcc"):
-            if _has_nvidia(): _install_tool("cuda")
-            else: return f"{C.ERROR}No NVIDIA GPU found for CUDA.{C.RESET}"
-        elif not shutil.which("cl.exe"):
-            _install_tool("msvc") # Asks to install VS Build Tools
-            return f"{C.WARN}Status: MSVC (cl.exe) not found. Required for CUDA.{C.RESET}"
+    _ensure_compiler(ext)
+    _update_env_path() # Refresh path after potential install
 
-    # Route to execution handlers
     if ext == ".py": return _run_py(file_path)
     if ext in [".cpp", ".c"]: return _run_cpp(file_path)
     if ext == ".java": return _run_java(file_path)
-    if ext == ".rs": return _run_rust(file_path)
     if ext == ".cu": return _run_cuda(file_path)
-    if ext == ".ino": return _run_arduino(file_path)
     
     return f"{C.ERROR}Extension {ext} not supported.{C.RESET}"
 
-def _install_tool(tool):
-    """Triggers os-specific browser downloads or terminal commands."""
-    print(f"  {C.WARN}Status: {tool.upper()} missing. Launching installer...{C.RESET}")
-    urls = {
-        "java": "https://aws.amazon.com/corretto/",
-        "g++": "https://www.msys2.org/",
-        "cuda": "https://developer.nvidia.com/cuda-downloads",
-        "msvc": "https://visualstudio.microsoft.com/visual-cpp-build-tools/",
-        "rust": "https://rustup.rs",
-        "arduino": "https://arduino.github.io/arduino-cli/latest/installation/"
-    }
-    if tool in urls:
-        subprocess.run(f"start {urls[tool]}", shell=True)
-    print(f"  {C.SUCCESS}Action: Complete installation and restart the console.{C.RESET}")
+def _run_java(p):
+    with Spinner("Compiling Java"):
+        res = subprocess.run(["javac", str(p)], capture_output=True, text=True, encoding='utf-8')
+    if res.returncode != 0: return f"{C.ERROR}Java Error:{C.RESET}\n{res.stderr}"
+    
+    subprocess.run(["java", "-cp", str(p.parent), p.stem], stdout=None, stderr=None)
+    return ""
+
+def _run_cpp(p):
+    out = p.with_suffix(".exe")
+    with Spinner("Compiling C++"):
+        # We use shell=True to catch the locally added MinGW in PATH
+        res = subprocess.run(f'g++ "{p}" -o "{out}"', shell=True, capture_output=True, text=True, encoding='utf-8')
+    if res.returncode != 0: return f"{C.ERROR}C++ Error:{C.RESET}\n{res.stderr}"
+    
+    subprocess.run([str(out)], stdout=None, stderr=None)
+    return ""
 
 def _run_cuda(p):
-    """Compiles and runs CUDA files with NVCC."""
-    out = p.stem + ".exe"
-    with Spinner(f"Compiling CUDA: {p.name}"):
-        # shell=True ensures we use the patched PATH for nvcc and cl.exe
-        res = subprocess.run(f'nvcc "{p}" -o "{out}"', shell=True, capture_output=True, text=True)
+    out = p.with_suffix(".exe")
+    # For CUDA, we must allow unsupported compilers to bypass the VS version check
+    cmd = f'nvcc "{p}" -o "{out}" -allow-unsupported-compiler'
+    with Spinner("Compiling CUDA"):
+        res = subprocess.run(cmd, shell=True, capture_output=True, text=True, encoding='utf-8', errors='replace')
     
     if res.returncode != 0:
         return f"{C.ERROR}CUDA Error:{C.RESET}\n{res.stderr}\n{res.stdout}"
     
-    print(f"  {C.PURPLE}Executing GPU Binary...{C.RESET}")
-    subprocess.run([str(Path(out).absolute())], stdout=None, stderr=None)
-    return f"  {C.MUTED}--- CUDA Process finished ---{C.RESET}"
+    subprocess.run([str(out.absolute())], stdout=None, stderr=None)
+    return ""
 
 def _run_py(p):
-    print(f"  {C.MUTED}Running Python: {p.name}{C.RESET}")
     subprocess.run(["python", str(p)], stdout=None, stderr=None)
     return ""
 
-def _run_java(p):
-    with Spinner(f"Compiling {p.name}"):
-        res = subprocess.run(["javac", str(p)], capture_output=True, text=True)
-        if res.returncode != 0: return f"{C.ERROR}Java Error:{C.RESET}\n{res.stderr}"
-    print(f"  {C.PURPLE}Launching JVM...{C.RESET}")
-    subprocess.run(["java", p.stem], stdout=None, stderr=None)
-    return f"  {C.MUTED}--- Process finished ---{C.RESET}"
-
-def _run_cpp(p):
-    out = p.stem + (".exe" if platform.system() == "Windows" else "")
-    with Spinner(f"Compiling {p.name}"):
-        res = subprocess.run(f'g++ "{p}" -o "{out}"', shell=True, capture_output=True, text=True)
-        if res.returncode != 0: return f"{C.ERROR}C++ Error:{C.RESET}\n{res.stderr}"
-    subprocess.run([f"./{out}" if platform.system() != "Windows" else out], stdout=None, stderr=None)
-    return f"  {C.MUTED}--- Process finished ---{C.RESET}"
-
-def _run_rust(p):
-    with Spinner(f"Compiling Rust {p.name}"):
-        res = subprocess.run(["rustc", str(p)], capture_output=True, text=True)
-        if res.returncode != 0: return f"{C.ERROR}Rust Error:{C.RESET}\n{res.stderr}"
-    exec_cmd = ["./" + p.stem if platform.system() != "Windows" else p.stem + ".exe"]
-    subprocess.run(exec_cmd, stdout=None, stderr=None)
-    return ""
-
-def _run_arduino(p):
-    board_data = subprocess.run(["arduino-cli", "board", "list"], capture_output=True, text=True).stdout
-    ports = re.findall(r"(COM\d+|/dev/tty[a-zA-Z0-9]+)", board_data)
-    if not ports: return f"{C.ERROR}No board detected.{C.RESET}"
-    for i, port in enumerate(ports): print(f"  [{i}] {port}")
-    try:
-        idx = int(input(f"  {C.CYAN}Select Port Index: {C.RESET}"))
-        port = ports[idx]
-        fqbn = input(f"  {C.CYAN}Enter FQBN: {C.RESET}").strip()
-        with Spinner("Uploading"):
-            subprocess.run(["arduino-cli", "compile", "--upload", "-p", port, "--fqbn", fqbn, str(p)])
-        return "Upload success."
-    except: return f"{C.ERROR}Failed to process selection.{C.RESET}"
-
-def _has_nvidia():
-    """Detects NVIDIA hardware."""
-    return shutil.which("nvidia-smi") is not None
-
 def on_startup(console):
-    """Greets the user on load."""
-    print(f"  {C.SUCCESS}Runner-Engine v3.3 (Global-Discovery) active.{C.RESET}")
+    _update_env_path()
+    print(f"  {C.SUCCESS}Runner-Engine v3.4 (Portable Toolchain) ready.{C.RESET}")
