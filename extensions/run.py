@@ -118,41 +118,49 @@ def _install_tool(tool):
     """
     Launch an OS-specific installer or open the relevant download page.
 
+    On Windows, 'start' is a shell built-in and must be invoked via shell=True
+    as a single command string — NOT as a list.
+
     Args:
         tool (str): Tool identifier: 'java', 'g++', 'rust', 'cuda', or 'arduino'.
     """
     print(f"  {C.WARN}'{tool}' not found — launching installer…{C.RESET}")
     is_windows = platform.system() == "Windows"
 
+    # Each entry is (command_string, use_shell).
+    # Windows URLs use 'start <url>' which requires shell=True.
+    # Linux commands are passed as strings to shell=True as well for simplicity.
     installers = {
         "java": {
-            True:  ("start", "https://aws.amazon.com/corretto/"),
-            False: ("sudo apt install -y default-jdk",),
+            True:  ("start https://aws.amazon.com/corretto/",                                True),
+            False: ("sudo apt install -y default-jdk",                                        True),
         },
         "g++": {
-            True:  ("start", "https://www.msys2.org/"),
-            False: ("sudo apt install -y build-essential",),
+            True:  ("start https://www.msys2.org/",                                          True),
+            False: ("sudo apt install -y build-essential",                                    True),
         },
         "rust": {
-            True:  ("start", "https://rustup.rs"),
-            False: ("curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh",),
+            True:  ("start https://rustup.rs",                                               True),
+            False: ("curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh",        True),
         },
         "cuda": {
-            True:  ("start", "https://developer.nvidia.com/cuda-downloads"),
-            False: ("start", "https://developer.nvidia.com/cuda-downloads"),
+            True:  ("start https://developer.nvidia.com/cuda-downloads",                     True),
+            False: ("xdg-open https://developer.nvidia.com/cuda-downloads",                  True),
         },
         "arduino": {
-            True:  ("start", "https://arduino.github.io/arduino-cli/latest/installation/"),
+            True:  ("start https://arduino.github.io/arduino-cli/latest/installation/",      True),
             False: (
                 "curl -fsSL "
                 "https://raw.githubusercontent.com/arduino/arduino-cli/master/install.sh | sh",
+                True,
             ),
         },
     }
 
     entry = installers.get(tool, {}).get(is_windows)
     if entry:
-        subprocess.run(entry if len(entry) > 1 else entry[0], shell=True)
+        cmd, use_shell = entry
+        subprocess.run(cmd, shell=use_shell)
 
     print(f"  {C.SUCCESS}Follow the installer instructions, then restart the console.{C.RESET}")
 
@@ -216,15 +224,26 @@ def _run_cuda(path):
     if not _has_nvidia_gpu():
         return f"{C.ERROR}No NVIDIA GPU detected — CUDA is unavailable.{C.RESET}"
 
-    binary = path.stem + (".exe" if platform.system() == "Windows" else "")
+    # Place the binary next to the source file to avoid working-directory issues.
+    binary = path.parent / (path.stem + (".exe" if platform.system() == "Windows" else ""))
 
     with Spinner(f"Building CUDA binary from {path.name}"):
-        result = subprocess.run(["nvcc", str(path), "-o", binary], capture_output=True, text=True)
+        result = subprocess.run(
+            ["nvcc", str(path), "-o", str(binary)],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",   # Prevent UnicodeDecodeError on Windows terminals.
+        )
+
+    # nvcc sometimes writes errors to stdout rather than stderr — include both.
+    compiler_output = "\n".join(filter(None, [result.stdout.strip(), result.stderr.strip()]))
 
     if result.returncode != 0:
-        return f"{C.ERROR}CUDA compilation failed:\n{result.stderr}{C.RESET}"
+        detail = compiler_output or "(nvcc produced no output)"
+        return f"{C.ERROR}CUDA compilation failed:\n{detail}{C.RESET}"
 
-    subprocess.run([str(Path(binary).absolute())])
+    subprocess.run([str(binary.absolute())])
     return ""
 
 
