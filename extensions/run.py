@@ -1,152 +1,277 @@
 # CC-TYPE: extension
 # CC-NAME: run
-# CC-DESCRIPTION: Autonomous Runner v3.8.8. Fixes NVCC German Regex Bug & Auto-Downloads OpenCL Headers.
+# CC-DESCRIPTION: Universal runner and auto-installer for Python, C/C++, Java, Rust, CUDA, and Arduino.
 
 import os
 import subprocess
 import shutil
 import platform
-import zipfile
-import urllib.request
+import re
 from pathlib import Path
 from ui import C, Spinner
-from utils import feat_data_dir
+
+
+# ---------------------------------------------------------------------------
+# Command registration
+# ---------------------------------------------------------------------------
 
 def provides_commands():
-    return {"run": {"handler": handle_run, "description": "Smart runner with autonomous toolchains."}}
+    """Register the 'run' command with the extension host."""
+    return {
+        "run": {
+            "handler": handle_run,
+            "description": (
+                "Compile and execute source files by extension. "
+                "Missing toolchains are installed automatically."
+            )
+        }
+    }
 
-def _get_bin_dir():
-    d = feat_data_dir() / "bin"
-    if not d.exists(): d.mkdir(parents=True, exist_ok=True)
-    return d
 
-def _get_vcvars_path():
-    if platform.system() != "Windows": return None
-    vswhere = r"C:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.exe"
-    if os.path.exists(vswhere):
-        try:
-            res = subprocess.run([vswhere, "-latest", "-property", "installationPath"], capture_output=True, text=True, errors='replace')
-            install_path = res.stdout.strip()
-            if install_path:
-                vcvars = Path(install_path) / "VC" / "Auxiliary" / "Build" / "vcvarsall.bat"
-                if vcvars.exists(): return str(vcvars)
-        except: pass
-    return None
-
-def _update_env_paths_internal():
-    bin_dir = _get_bin_dir()
-    extra_paths = [
-        str(bin_dir / "w64devkit" / "bin"),
-        str(bin_dir / "jdk" / "bin")
-    ]
-    for p in extra_paths:
-        if os.path.exists(p) and p not in os.environ["PATH"]:
-            os.environ["PATH"] = p + os.pathsep + os.environ["PATH"]
-
-def _download_with_progress(url, filename):
-    path = _get_bin_dir() / filename
-    req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
-    try:
-        with urllib.request.urlopen(req) as resp:
-            total = int(resp.info().get('Content-Length').strip())
-            current = 0
-            with open(path, 'wb') as f:
-                while chunk := resp.read(1024 * 512):
-                    f.write(chunk)
-                    current += len(chunk)
-                    print(f"\r  Downloading: {int(current/total*100)}%", end="")
-        print("\n")
-        return path
-    except Exception as e:
-        print(f"\n  {C.ERROR}Download failed: {e}{C.RESET}")
-        return None
-
-def _ensure_opencl_headers():
-    """Downloads official Khronos OpenCL headers for portable C++ compilation."""
-    h_dir = _get_bin_dir() / "OpenCL-Headers-main"
-    if not h_dir.exists():
-        print(f"  {C.WARN}OpenCL Headers missing. Downloading Khronos SDK...{C.RESET}")
-        url = "https://github.com/KhronosGroup/OpenCL-Headers/archive/refs/heads/main.zip"
-        zip_p = _download_with_progress(url, "cl_headers.zip")
-        if zip_p:
-            with Spinner("Extracting OpenCL Headers"):
-                with zipfile.ZipFile(zip_p, 'r') as z:
-                    z.extractall(_get_bin_dir())
-            os.remove(zip_p)
-    return str(h_dir)
+# ---------------------------------------------------------------------------
+# Main dispatcher
+# ---------------------------------------------------------------------------
 
 def handle_run(args, console):
-    if not args: return f"{C.ERROR}Usage: run <filepath>{C.RESET}"
-    _update_env_paths_internal()
-    
-    file_path = Path(" ".join(args).strip().strip('"').strip("'"))
-    if not file_path.exists(): return f"{C.ERROR}File not found.{C.RESET}"
+    """
+    Resolve the file path, ensure the required toolchain is present, then
+    compile and/or execute the file.
+
+    Supported extensions: .py  .c  .cpp  .java  .rs  .cu  .ino
+
+    Args:
+        args (list[str]): Command arguments; the first element is the file path.
+        console: The active console instance (unused, required by interface).
+
+    Returns:
+        str: Execution result or error message.
+    """
+    if not args:
+        return f"{C.ERROR}Usage: run <filepath>{C.RESET}"
+
+    # Reconstruct and sanitise the path (handles spaces and surrounding quotes).
+    raw_path = " ".join(args).strip().strip('"').strip("'")
+    file_path = Path(raw_path)
+
+    if not file_path.exists():
+        return f"{C.ERROR}File not found: {file_path.absolute()}{C.RESET}"
+
     ext = file_path.suffix.lower()
 
-    if ext in [".cpp", ".c", ".cl"]:
-        if not shutil.which("g++"):
-            url = "https://github.com/skeeto/w64devkit/releases/download/v1.19.0/w64devkit-1.19.0.zip"
-            print(f"  {C.WARN}W64DEVKIT setup starting. This happens only once!{C.RESET}")
-            zip_p = _download_with_progress(url, "w64devkit.zip")
-            if zip_p:
-                with Spinner("Extracting Toolchain"):
-                    with zipfile.ZipFile(zip_p, 'r') as z:
-                        z.extractall(_get_bin_dir())
-                os.remove(zip_p)
-        _ensure_opencl_headers() # Always ensure headers exist for C++
-        
-    _update_env_paths_internal()
-    return _execute(file_path, ext)
+    # Ensure the required toolchain is available before attempting to compile.
+    _ensure_toolchain(ext)
 
-def _execute(p, ext):
-    if ext == ".py": 
-        subprocess.run(["python", str(p)], stdout=None, stderr=None)
-    
-    elif ext == ".java":
-        subprocess.run(["javac", str(p)], check=True)
-        subprocess.run(["java", "-cp", str(p.parent), p.stem], stdout=None, stderr=None)
-    
-    elif ext in [".cpp", ".c"]:
-        out = p.with_suffix(".exe")
-        headers = _ensure_opencl_headers()
-        opencl_dll = r"C:\Windows\System32\OpenCL.dll"
-        
-        cmd = f'g++ "{p}" -o "{out}" -I"{headers}"'
-        if os.path.exists(opencl_dll):
-            cmd += f' "{opencl_dll}"' # Direct linking to system OpenCL driver
-            
-        with Spinner("Compiling C++ / OpenCL"):
-            res = subprocess.run(cmd, shell=True, capture_output=True, text=True, errors='replace')
-        if res.returncode != 0: return f"{C.ERROR}C++ Error:{C.RESET}\n{res.stderr}"
-        subprocess.run([str(out.absolute())], stdout=None, stderr=None)
-    
-    elif ext == ".cu":
-        out = p.with_suffix(".exe")
-        vcvars = _get_vcvars_path()
-        bat_file = p.with_suffix(".build.bat")
-        
-        try:
-            with open(bat_file, "w", encoding="utf-8") as f:
-                f.write("@echo off\n")
-                f.write("set VSLANG=1033\n") # FIX: Force MSVC to English so NVCC understands "for x64"
-                f.write("chcp 65001 >nul\n")
-                if vcvars:
-                    f.write(f'call "{vcvars}" x64 >nul 2>&1\n')
-                f.write(f'nvcc -m64 "{p}" -o "{out}" -allow-unsupported-compiler\n')
-            
-            with Spinner("Compiling CUDA (GPU)"):
-                res = subprocess.run([str(bat_file)], capture_output=True, text=True, encoding='utf-8', errors='replace')
-            
-            if res.returncode != 0:
-                return f"{C.ERROR}CUDA Compilation Error:{C.RESET}\n{res.stderr}\n{res.stdout}"
-        
-        finally:
-            if bat_file.exists(): bat_file.unlink()
+    dispatch = {
+        ".py":   _run_py,
+        ".c":    _run_cpp,
+        ".cpp":  _run_cpp,
+        ".java": _run_java,
+        ".rs":   _run_rust,
+        ".cu":   _run_cuda,
+        ".ino":  _run_arduino,
+    }
 
-        subprocess.run([str(out.absolute())], stdout=None, stderr=None)
-    
+    handler = dispatch.get(ext)
+    if handler is None:
+        return f"{C.ERROR}Unsupported extension: '{ext}'.{C.RESET}"
+
+    return handler(file_path)
+
+
+# ---------------------------------------------------------------------------
+# Toolchain management
+# ---------------------------------------------------------------------------
+
+def _ensure_toolchain(ext):
+    """
+    Check whether the toolchain required for *ext* is available and, if not,
+    trigger OS-appropriate installation.
+
+    Args:
+        ext (str): File extension including the leading dot (e.g. '.cpp').
+    """
+    checks = {
+        ".c":    ("g++",         "g++"),
+        ".cpp":  ("g++",         "g++"),
+        ".java": ("javac",       "java"),
+        ".rs":   ("rustc",       "rust"),
+        ".cu":   ("nvcc",        "cuda"),
+        ".ino":  ("arduino-cli", "arduino"),
+    }
+
+    entry = checks.get(ext)
+    if entry is None:
+        return  # No external toolchain required (e.g. Python).
+
+    binary, tool_key = entry
+
+    if shutil.which(binary):
+        return  # Already installed.
+
+    if tool_key == "cuda" and not _has_nvidia_gpu():
+        return  # Let _run_cuda handle the missing-GPU error.
+
+    _install_tool(tool_key)
+
+
+def _install_tool(tool):
+    """
+    Launch an OS-specific installer or open the relevant download page.
+
+    Args:
+        tool (str): Tool identifier: 'java', 'g++', 'rust', 'cuda', or 'arduino'.
+    """
+    print(f"  {C.WARN}'{tool}' not found — launching installer…{C.RESET}")
+    is_windows = platform.system() == "Windows"
+
+    installers = {
+        "java": {
+            True:  ("start", "https://aws.amazon.com/corretto/"),
+            False: ("sudo apt install -y default-jdk",),
+        },
+        "g++": {
+            True:  ("start", "https://www.msys2.org/"),
+            False: ("sudo apt install -y build-essential",),
+        },
+        "rust": {
+            True:  ("start", "https://rustup.rs"),
+            False: ("curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh",),
+        },
+        "cuda": {
+            True:  ("start", "https://developer.nvidia.com/cuda-downloads"),
+            False: ("start", "https://developer.nvidia.com/cuda-downloads"),
+        },
+        "arduino": {
+            True:  ("start", "https://arduino.github.io/arduino-cli/latest/installation/"),
+            False: (
+                "curl -fsSL "
+                "https://raw.githubusercontent.com/arduino/arduino-cli/master/install.sh | sh",
+            ),
+        },
+    }
+
+    entry = installers.get(tool, {}).get(is_windows)
+    if entry:
+        subprocess.run(entry if len(entry) > 1 else entry[0], shell=True)
+
+    print(f"  {C.SUCCESS}Follow the installer instructions, then restart the console.{C.RESET}")
+
+
+# ---------------------------------------------------------------------------
+# Language runners
+# ---------------------------------------------------------------------------
+
+def _run_py(path):
+    """Execute a Python script in a subprocess (inherits stdio for interactivity)."""
+    print(f"  {C.MUTED}Running Python: {path.name}{C.RESET}")
+    subprocess.run(["python", str(path)])
     return ""
 
+
+def _run_cpp(path):
+    """Compile a C/C++ file with g++ and execute the resulting binary."""
+    binary = path.stem + (".exe" if platform.system() == "Windows" else "")
+
+    with Spinner(f"Compiling {path.name}"):
+        result = subprocess.run(["g++", str(path), "-o", binary], capture_output=True, text=True)
+
+    if result.returncode != 0:
+        return f"{C.ERROR}Compilation failed:\n{result.stderr}{C.RESET}"
+
+    exec_cmd = [binary] if platform.system() == "Windows" else [f"./{binary}"]
+    subprocess.run(exec_cmd)
+    return f"  {C.MUTED}--- Process finished ---{C.RESET}"
+
+
+def _run_java(path):
+    """Compile a Java source file and run the resulting class (GUI-compatible)."""
+    with Spinner(f"Compiling {path.name}"):
+        result = subprocess.run(["javac", str(path)], capture_output=True, text=True)
+
+    if result.returncode != 0:
+        return f"{C.ERROR}Compilation failed:\n{result.stderr}{C.RESET}"
+
+    print(f"  {C.PURPLE}Launching JVM…{C.RESET}")
+    # Inherit stdio so that GUI windows and interactive programs work correctly.
+    subprocess.run(["java", path.stem])
+    return f"  {C.MUTED}--- Process finished ---{C.RESET}"
+
+
+def _run_rust(path):
+    """Compile a Rust source file with rustc and execute it."""
+    with Spinner(f"Compiling {path.name}"):
+        result = subprocess.run(["rustc", str(path)], capture_output=True, text=True)
+
+    if result.returncode != 0:
+        return f"{C.ERROR}Compilation failed:\n{result.stderr}{C.RESET}"
+
+    binary = path.stem + (".exe" if platform.system() == "Windows" else "")
+    exec_cmd = [binary] if platform.system() == "Windows" else [f"./{binary}"]
+    subprocess.run(exec_cmd)
+    return ""
+
+
+def _run_cuda(path):
+    """Compile a CUDA source file with nvcc and execute the resulting binary."""
+    if not _has_nvidia_gpu():
+        return f"{C.ERROR}No NVIDIA GPU detected — CUDA is unavailable.{C.RESET}"
+
+    binary = path.stem + (".exe" if platform.system() == "Windows" else "")
+
+    with Spinner(f"Building CUDA binary from {path.name}"):
+        result = subprocess.run(["nvcc", str(path), "-o", binary], capture_output=True, text=True)
+
+    if result.returncode != 0:
+        return f"{C.ERROR}CUDA compilation failed:\n{result.stderr}{C.RESET}"
+
+    subprocess.run([str(Path(binary).absolute())])
+    return ""
+
+
+def _run_arduino(path):
+    """Compile and upload an Arduino sketch after prompting for port and FQBN."""
+    board_data = subprocess.run(
+        ["arduino-cli", "board", "list"], capture_output=True, text=True
+    ).stdout
+    ports = re.findall(r"(COM\d+|/dev/tty[a-zA-Z0-9]+)", board_data)
+
+    if not ports:
+        return f"{C.ERROR}No Arduino board detected.{C.RESET}"
+
+    print(f"  {C.HEADING}Detected ports:{C.RESET}")
+    for idx, port in enumerate(ports):
+        print(f"    [{idx}] {port}")
+
+    try:
+        selection = int(input(f"  {C.CYAN}Select port index: {C.RESET}"))
+        selected_port = ports[selection]
+    except (ValueError, IndexError):
+        return f"{C.ERROR}Invalid selection.{C.RESET}"
+
+    fqbn = input(f"  {C.CYAN}Enter FQBN (e.g. arduino:avr:uno): {C.RESET}").strip()
+
+    with Spinner("Compiling and uploading"):
+        subprocess.run([
+            "arduino-cli", "compile", "--upload",
+            "-p", selected_port, "--fqbn", fqbn, str(path)
+        ])
+
+    return "  Upload complete."
+
+
+# ---------------------------------------------------------------------------
+# Utility helpers
+# ---------------------------------------------------------------------------
+
+def _has_nvidia_gpu():
+    """Return True if nvidia-smi is available, indicating an NVIDIA GPU is present."""
+    return shutil.which("nvidia-smi") is not None
+
+
+# ---------------------------------------------------------------------------
+# Lifecycle hooks
+# ---------------------------------------------------------------------------
+
 def on_startup(console):
-    _update_env_paths_internal()
-    print(f"  {C.SUCCESS}Runner v3.8.8 (The Masterpiece) ready.{C.RESET}")
+    """Print a confirmation message when this extension is loaded."""
+    print(f"  {C.SUCCESS}✓{C.RESET} Runner Engine v3.1 online (GUI support enabled).")

@@ -1,6 +1,6 @@
 # CC-TYPE: extension
 # CC-NAME: git
-# CC-DESCRIPTION: Native Git-Integration
+# CC-DESCRIPTION: Native Git integration — exposes Git commands directly in the console.
 # CC-REQUIREMENTS: none
 
 import subprocess
@@ -8,25 +8,33 @@ import shutil
 
 
 def provides_commands():
-    """Registriert den 'git' Befehl."""
+    """Register the 'git' command with the extension host."""
     return {
         "git": {
             "handler": run_git,
-            "description": "Führt Git-Befehle aus (z.B. git status, git pull)"
+            "description": "Run Git commands directly (e.g. git status, git pull)."
         }
     }
 
 
 def run_git(args_list, console):
-    """Führt den Git-Befehl aus und gibt den Output zurück."""
+    """
+    Execute a Git command with the given arguments.
+
+    Args:
+        args_list (list[str]): Arguments to pass to the git binary.
+        console: The active console instance (unused here, required by the interface).
+
+    Returns:
+        str: Combined stdout/stderr output, or an error message.
+    """
     if not shutil.which("git"):
-        return "❌ Git ist auf diesem System nicht installiert oder nicht im PATH."
+        return "❌ Git is not installed or not available in PATH."
 
     if not args_list:
-        return "⚠️ Bitte gib einen Git-Befehl an (z.B. git status)."
+        return "⚠️  Please provide a Git command (e.g. git status)."
 
     try:
-        # Führt git mit den übergebenen Argumenten aus
         result = subprocess.run(
             ["git"] + args_list,
             capture_output=True,
@@ -34,20 +42,21 @@ def run_git(args_list, console):
             encoding="utf-8"
         )
 
-        output = ""
+        output_parts = []
         if result.stdout:
-            output += result.stdout
+            output_parts.append(result.stdout)
         if result.stderr:
-            # Git schreibt Warnungen oft in den stderr, auch wenn es kein Fehler ist
-            output += f"\n{result.stderr}"
+            # Git frequently writes informational messages to stderr — include them.
+            output_parts.append(result.stderr)
 
-        return output.strip() if output else "✔️ Git-Befehl erfolgreich ausgeführt."
+        combined = "\n".join(output_parts).strip()
+        return combined if combined else "✔️  Git command executed successfully."
 
-    except Exception as e:
-        return f"❌ Fehler beim Ausführen von Git: {str(e)}"
+    except Exception as exc:
+        return f"❌ Failed to execute Git: {exc}"
 
 
 def on_startup(console):
-    """Begrüßung beim Laden."""
+    """Print a confirmation message when this extension is loaded."""
     from ui import C
-    print(f"  {C.SUCCESS}✓{C.RESET} Git-Extension aktiv.")
+    print(f"  {C.SUCCESS}✓{C.RESET} Git extension active.")
