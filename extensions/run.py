@@ -1,6 +1,6 @@
 # CC-TYPE: extension
 # CC-NAME: run
-# CC-DESCRIPTION: Autonomous Runner v3.8.6. Batch-Script Override for Windows CMD Bugs.
+# CC-DESCRIPTION: Autonomous Runner v3.8.7. Fixes Unicode crashes and forces x64 VCVARS.
 
 import os
 import subprocess
@@ -25,10 +25,11 @@ def _get_vcvars_path():
     vswhere = r"C:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.exe"
     if os.path.exists(vswhere):
         try:
-            res = subprocess.run([vswhere, "-latest", "-property", "installationPath"], capture_output=True, text=True)
+            res = subprocess.run([vswhere, "-latest", "-property", "installationPath"], capture_output=True, text=True, errors='replace')
             install_path = res.stdout.strip()
             if install_path:
-                vcvars = Path(install_path) / "VC" / "Auxiliary" / "Build" / "vcvars64.bat"
+                # Switched to vcvarsall.bat (more reliable)
+                vcvars = Path(install_path) / "VC" / "Auxiliary" / "Build" / "vcvarsall.bat"
                 if vcvars.exists(): return str(vcvars)
         except: pass
     return None
@@ -69,7 +70,6 @@ def handle_run(args, console):
     if not file_path.exists(): return f"{C.ERROR}File not found.{C.RESET}"
     ext = file_path.suffix.lower()
 
-    # Frozen Link for w64devkit (Version 1.19.0 is permanent)
     if ext in [".cpp", ".c", ".cl"] and not shutil.which("g++"):
         url = "https://github.com/skeeto/w64devkit/releases/download/v1.19.0/w64devkit-1.19.0.zip"
         _download_and_extract(url, "w64devkit")
@@ -97,38 +97,37 @@ def _execute(p, ext):
     elif ext in [".cpp", ".c"]:
         out = p.with_suffix(".exe")
         with Spinner("Compiling C++"):
-            res = subprocess.run(f'g++ "{p}" -o "{out}" -lOpenCL', shell=True, capture_output=True, text=True)
+            res = subprocess.run(f'g++ "{p}" -o "{out}" -lOpenCL', shell=True, capture_output=True, text=True, errors='replace')
         if res.returncode != 0: return f"{C.ERROR}C++ Error:{C.RESET}\n{res.stderr}"
         subprocess.run([str(out.absolute())], stdout=None, stderr=None)
     
     elif ext == ".cu":
         out = p.with_suffix(".exe")
         vcvars = _get_vcvars_path()
-        bat_file = p.with_suffix(".build.bat") # The Windows Bug Override
+        bat_file = p.with_suffix(".build.bat")
         
         try:
-            # Create a temporary batch file to bypass python's cmd parsing issues
-            with open(bat_file, "w") as f:
+            with open(bat_file, "w", encoding="utf-8") as f:
                 f.write("@echo off\n")
+                f.write("chcp 65001 >nul\n") # Force Windows CMD to use UTF-8 (Fixes the crash)
                 if vcvars:
-                    f.write(f'call "{vcvars}" >nul 2>&1\n') # >nul hides the messy Microsoft output
+                    f.write(f'call "{vcvars}" x64 >nul\n') # Safely load 64-bit environment
                 f.write(f'nvcc -m64 "{p}" -o "{out}" -allow-unsupported-compiler\n')
             
             with Spinner("Compiling CUDA (GPU)"):
-                res = subprocess.run([str(bat_file)], capture_output=True, text=True)
+                # Use utf-8 encoding and replace errors so python never crashes again
+                res = subprocess.run([str(bat_file)], capture_output=True, text=True, encoding='utf-8', errors='replace')
             
             if res.returncode != 0:
                 return f"{C.ERROR}CUDA Compilation Error:{C.RESET}\n{res.stderr}\n{res.stdout}"
         
         finally:
-            # Always clean up the temp file
             if bat_file.exists(): bat_file.unlink()
 
-        # Execute the compiled GPU binary
         subprocess.run([str(out.absolute())], stdout=None, stderr=None)
     
     return ""
 
 def on_startup(console):
     _update_env_paths_internal()
-    print(f"  {C.SUCCESS}Runner v3.8.6 (The Final Boss Fix) ready.{C.RESET}")
+    print(f"  {C.SUCCESS}Runner v3.8.7 (Encoding & x64 Fix) ready.{C.RESET}")
