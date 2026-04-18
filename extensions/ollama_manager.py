@@ -1,10 +1,14 @@
-# CC-TYPE: extension
-# CC-NAME: ollama_manager
+# CC-TYPE:        extension
+# CC-NAME:        ollama_manager
+# CC-VERSION:     E0.1
 # CC-DESCRIPTION: Ollama model management — list, pull, and set up local LLM models.
+# CC-REQUIREMENTS: ollama
 
 import subprocess
 import shutil
 from ui import C, Spinner
+
+VERSION = "E0.1"
 
 
 # ---------------------------------------------------------------------------
@@ -15,9 +19,11 @@ def on_startup(console):
     """Print a non-blocking hint when the extension is loaded."""
     if shutil.which("ollama"):
         print(
-            f"  {C.MUTED}Ollama Manager active. "
-            f"Type 'ollama setup' for first-time installation.{C.RESET}"
+            f"  {C.SUCCESS}✓{C.RESET} Ollama Manager v{VERSION} active. "
+            f"{C.MUTED}Type 'ollama setup' for first-time installation.{C.RESET}"
         )
+    else:
+        print(f"  {C.WARN}⚠{C.RESET} Ollama Manager v{VERSION} loaded — ollama not found in PATH.")
 
 
 # ---------------------------------------------------------------------------
@@ -34,15 +40,19 @@ def provides_commands():
     }
 
 
+# ---------------------------------------------------------------------------
+# Command handler
+# ---------------------------------------------------------------------------
+
 def cmd_handler(args, console):
     """
     Dispatch sub-commands for Ollama management.
 
     Sub-commands:
-        (none)       List all locally available models.
-        list         Same as above.
-        setup        Interactively install the recommended model set.
-        pull <name>  Pull a specific model by name.
+        (none)         List all locally available models.
+        list           Same as above.
+        setup          Interactively install the recommended model set.
+        pull <model>   Pull a specific model by name.
 
     Args:
         args (list[str]): Sub-command and optional arguments.
@@ -51,13 +61,10 @@ def cmd_handler(args, console):
     Returns:
         str: Result message.
     """
-    if not args:
+    if not args or args[0].lower() == "list":
         return _list_models()
 
     sub_cmd = args[0].lower()
-
-    if sub_cmd == "list":
-        return _list_models()
 
     if sub_cmd == "setup":
         answer = input("  Install recommended models? (y/N): ").strip().lower()

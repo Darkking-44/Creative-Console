@@ -1,14 +1,17 @@
-# CC-TYPE: extension
-# CC-NAME: run
+# CC-TYPE:        extension
+# CC-NAME:        run
+# CC-VERSION:     E0.1
 # CC-DESCRIPTION: Universal runner and auto-installer for Python, C/C++, Java, Rust, CUDA, and Arduino.
+# CC-REQUIREMENTS: none
 
-import os
 import subprocess
 import shutil
 import platform
 import re
 from pathlib import Path
 from ui import C, Spinner
+
+VERSION = "E0.1"
 
 
 # ---------------------------------------------------------------------------
@@ -58,7 +61,7 @@ def handle_run(args, console):
 
     ext = file_path.suffix.lower()
 
-    # Ensure the required toolchain is available before attempting to compile.
+    # Ensure the required toolchain is present before attempting to compile.
     _ensure_toolchain(ext)
 
     dispatch = {
@@ -109,7 +112,7 @@ def _ensure_toolchain(ext):
         return  # Already installed.
 
     if tool_key == "cuda" and not _has_nvidia_gpu():
-        return  # Let _run_cuda handle the missing-GPU error.
+        return  # Let _run_cuda surface the missing-GPU error.
 
     _install_tool(tool_key)
 
@@ -118,37 +121,35 @@ def _install_tool(tool):
     """
     Launch an OS-specific installer or open the relevant download page.
 
-    On Windows, 'start' is a shell built-in and must be invoked via shell=True
-    as a single command string — NOT as a list.
+    On Windows, 'start' is a shell built-in and must be invoked via
+    shell=True as a plain command string — NOT as a list.
 
     Args:
         tool (str): Tool identifier: 'java', 'g++', 'rust', 'cuda', or 'arduino'.
     """
-    print(f"  {C.WARN}'{tool}' not found — launching installer…{C.RESET}")
+    print(f"  {C.WARN}⚠{C.RESET} '{tool}' not found — launching installer…")
     is_windows = platform.system() == "Windows"
 
-    # Each entry is (command_string, use_shell).
-    # Windows URLs use 'start <url>' which requires shell=True.
-    # Linux commands are passed as strings to shell=True as well for simplicity.
+    # Each entry: (command_string, shell).
     installers = {
         "java": {
-            True:  ("start https://aws.amazon.com/corretto/",                                True),
-            False: ("sudo apt install -y default-jdk",                                        True),
+            True:  ("start https://aws.amazon.com/corretto/",                               True),
+            False: ("sudo apt install -y default-jdk",                                       True),
         },
         "g++": {
-            True:  ("start https://www.msys2.org/",                                          True),
-            False: ("sudo apt install -y build-essential",                                    True),
+            True:  ("start https://www.msys2.org/",                                         True),
+            False: ("sudo apt install -y build-essential",                                   True),
         },
         "rust": {
-            True:  ("start https://rustup.rs",                                               True),
-            False: ("curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh",        True),
+            True:  ("start https://rustup.rs",                                              True),
+            False: ("curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh",       True),
         },
         "cuda": {
-            True:  ("start https://developer.nvidia.com/cuda-downloads",                     True),
-            False: ("xdg-open https://developer.nvidia.com/cuda-downloads",                  True),
+            True:  ("start https://developer.nvidia.com/cuda-downloads",                    True),
+            False: ("xdg-open https://developer.nvidia.com/cuda-downloads",                 True),
         },
         "arduino": {
-            True:  ("start https://arduino.github.io/arduino-cli/latest/installation/",      True),
+            True:  ("start https://arduino.github.io/arduino-cli/latest/installation/",     True),
             False: (
                 "curl -fsSL "
                 "https://raw.githubusercontent.com/arduino/arduino-cli/master/install.sh | sh",
@@ -162,7 +163,7 @@ def _install_tool(tool):
         cmd, use_shell = entry
         subprocess.run(cmd, shell=use_shell)
 
-    print(f"  {C.SUCCESS}Follow the installer instructions, then restart the console.{C.RESET}")
+    print(f"  {C.SUCCESS}→{C.RESET} Follow the installer instructions, then restart the console.")
 
 
 # ---------------------------------------------------------------------------
@@ -181,7 +182,10 @@ def _run_cpp(path):
     binary = path.stem + (".exe" if platform.system() == "Windows" else "")
 
     with Spinner(f"Compiling {path.name}"):
-        result = subprocess.run(["g++", str(path), "-o", binary], capture_output=True, text=True)
+        result = subprocess.run(
+            ["g++", str(path), "-o", binary],
+            capture_output=True, text=True
+        )
 
     if result.returncode != 0:
         return f"{C.ERROR}Compilation failed:\n{result.stderr}{C.RESET}"
@@ -192,16 +196,28 @@ def _run_cpp(path):
 
 
 def _run_java(path):
-    """Compile a Java source file and run the resulting class (GUI-compatible)."""
+    """
+    Compile a Java source file and run the resulting class (GUI-compatible).
+
+    javac is told to output the .class file into the same directory as the
+    source (-d flag). The JVM is then invoked from that directory so that
+    java <ClassName> can always find the class regardless of the shell's
+    current working directory.
+    """
+    out_dir = path.parent  # Place .class next to the .java file.
+
     with Spinner(f"Compiling {path.name}"):
-        result = subprocess.run(["javac", str(path)], capture_output=True, text=True)
+        result = subprocess.run(
+            ["javac", "-d", str(out_dir), str(path)],
+            capture_output=True, text=True
+        )
 
     if result.returncode != 0:
         return f"{C.ERROR}Compilation failed:\n{result.stderr}{C.RESET}"
 
-    print(f"  {C.PURPLE}Launching JVM…{C.RESET}")
-    # Inherit stdio so that GUI windows and interactive programs work correctly.
-    subprocess.run(["java", path.stem])
+    print(f"  {C.MUTED}Launching JVM…{C.RESET}")
+    # Run from the source directory and inherit stdio (supports GUI and interactive programs).
+    subprocess.run(["java", path.stem], cwd=str(out_dir))
     return f"  {C.MUTED}--- Process finished ---{C.RESET}"
 
 
@@ -220,9 +236,25 @@ def _run_rust(path):
 
 
 def _run_cuda(path):
-    """Compile a CUDA source file with nvcc and execute the resulting binary."""
+    """
+    Compile a CUDA source file with nvcc and execute the resulting binary.
+
+    On Windows, nvcc delegates actual compilation to MSVC's cl.exe. If cl.exe
+    is not in PATH, we attempt to locate it automatically via vswhere (bundled
+    with every Visual Studio / Build Tools installation since 2017). If found,
+    cl.exe's directory is injected into the current process environment before
+    invoking nvcc. If not found, a clear actionable error is returned.
+    """
     if not _has_nvidia_gpu():
         return f"{C.ERROR}No NVIDIA GPU detected — CUDA is unavailable.{C.RESET}"
+
+    env = _prepare_cuda_env()
+    if env is None:
+        return (
+            f"{C.ERROR}nvcc requires Microsoft's cl.exe compiler, which was not found.\n"
+            f"  Install 'Desktop development with C++' from Visual Studio Build Tools:\n"
+            f"  https://aka.ms/vs/17/release/vs_BuildTools.exe{C.RESET}"
+        )
 
     # Place the binary next to the source file to avoid working-directory issues.
     binary = path.parent / (path.stem + (".exe" if platform.system() == "Windows" else ""))
@@ -234,6 +266,7 @@ def _run_cuda(path):
             text=True,
             encoding="utf-8",
             errors="replace",   # Prevent UnicodeDecodeError on Windows terminals.
+            env=env,
         )
 
     # nvcc sometimes writes errors to stdout rather than stderr — include both.
@@ -287,10 +320,65 @@ def _has_nvidia_gpu():
     return shutil.which("nvidia-smi") is not None
 
 
+def _prepare_cuda_env():
+    """
+    Return an environment dict suitable for invoking nvcc on Windows.
+
+    On non-Windows systems the current environment is returned unchanged.
+    On Windows, if cl.exe is already in PATH the environment is returned as-is.
+    Otherwise, vswhere is used to locate the latest MSVC toolchain and its
+    host/target bin directory is prepended to PATH.
+
+    Returns:
+        dict | None: A copy of os.environ with an updated PATH, or None if
+                     cl.exe cannot be located on Windows.
+    """
+    import os
+    env = os.environ.copy()
+
+    if platform.system() != "Windows":
+        return env  # Not needed on Linux/macOS.
+
+    if shutil.which("cl.exe"):
+        return env  # Already available — nothing to do.
+
+    # Attempt to find cl.exe via vswhere (present in all VS/Build Tools installs).
+    vswhere = (
+        r"C:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.exe"
+    )
+    if not Path(vswhere).exists():
+        return None  # Visual Studio / Build Tools not installed at all.
+
+    try:
+        vs_path_result = subprocess.run(
+            [vswhere, "-latest", "-products", "*",
+             "-requires", "Microsoft.VisualStudio.Component.VC.Tools.x86.x64",
+             "-property", "installationPath"],
+            capture_output=True, text=True
+        )
+        vs_root = vs_path_result.stdout.strip()
+        if not vs_root:
+            return None
+
+        # Walk into the MSVC toolchain to find the cl.exe host/target bin dir.
+        vc_tools_root = Path(vs_root) / "VC" / "Tools" / "MSVC"
+        versions = sorted(vc_tools_root.iterdir(), reverse=True)  # Latest first.
+        for ver_dir in versions:
+            cl = ver_dir / "bin" / "HostX64" / "x64" / "cl.exe"
+            if cl.exists():
+                env["PATH"] = str(cl.parent) + os.pathsep + env.get("PATH", "")
+                return env
+
+    except Exception:
+        pass
+
+    return None  # Could not locate cl.exe.
+
+
 # ---------------------------------------------------------------------------
 # Lifecycle hooks
 # ---------------------------------------------------------------------------
 
 def on_startup(console):
     """Print a confirmation message when this extension is loaded."""
-    print(f"  {C.SUCCESS}✓{C.RESET} Runner Engine v3.1 online (GUI support enabled).")
+    print(f"  {C.SUCCESS}✓{C.RESET} Run Extension v{VERSION} active.")

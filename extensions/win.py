@@ -1,11 +1,19 @@
-# CC-TYPE: extension
-# CC-NAME: win
+# CC-TYPE:        extension
+# CC-NAME:        win
+# CC-VERSION:     E0.1
 # CC-DESCRIPTION: Windows PowerShell bridge — execute native PowerShell commands from the console.
 # CC-REQUIREMENTS: none
 
 import subprocess
 import os
+from ui import C
 
+VERSION = "E0.1"
+
+
+# ---------------------------------------------------------------------------
+# Command registration
+# ---------------------------------------------------------------------------
 
 def provides_commands():
     """Register the 'win' command with the extension host."""
@@ -16,6 +24,10 @@ def provides_commands():
         }
     }
 
+
+# ---------------------------------------------------------------------------
+# Command handler
+# ---------------------------------------------------------------------------
 
 def run_powershell(args_list, console):
     """
@@ -57,7 +69,10 @@ def run_powershell(args_list, console):
         return f"❌ Failed to execute PowerShell command: {exc}"
 
 
+# ---------------------------------------------------------------------------
+# Lifecycle hooks
+# ---------------------------------------------------------------------------
+
 def on_startup(console):
     """Print a confirmation message when this extension is loaded."""
-    from ui import C
-    print(f"  {C.SUCCESS}✓{C.RESET} Windows PowerShell bridge ready.")
+    print(f"  {C.SUCCESS}✓{C.RESET} Win Extension v{VERSION} active.")

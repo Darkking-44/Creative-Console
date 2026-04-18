@@ -1,11 +1,18 @@
-# CC-TYPE: extension
-# CC-NAME: git
+# CC-TYPE:        extension
+# CC-NAME:        git
+# CC-VERSION:     E0.1
 # CC-DESCRIPTION: Native Git integration — exposes Git commands directly in the console.
 # CC-REQUIREMENTS: none
 
 import subprocess
 import shutil
 
+VERSION = "E0.1"
+
+
+# ---------------------------------------------------------------------------
+# Command registration
+# ---------------------------------------------------------------------------
 
 def provides_commands():
     """Register the 'git' command with the extension host."""
@@ -17,13 +24,17 @@ def provides_commands():
     }
 
 
+# ---------------------------------------------------------------------------
+# Command handler
+# ---------------------------------------------------------------------------
+
 def run_git(args_list, console):
     """
     Execute a Git command with the given arguments.
 
     Args:
         args_list (list[str]): Arguments to pass to the git binary.
-        console: The active console instance (unused here, required by the interface).
+        console: The active console instance (unused, required by interface).
 
     Returns:
         str: Combined stdout/stderr output, or an error message.
@@ -56,7 +67,11 @@ def run_git(args_list, console):
         return f"❌ Failed to execute Git: {exc}"
 
 
+# ---------------------------------------------------------------------------
+# Lifecycle hooks
+# ---------------------------------------------------------------------------
+
 def on_startup(console):
     """Print a confirmation message when this extension is loaded."""
     from ui import C
-    print(f"  {C.SUCCESS}✓{C.RESET} Git extension active.")
+    print(f"  {C.SUCCESS}✓{C.RESET} Git Extension v{VERSION} active.")

@@ -1,10 +1,18 @@
-# CC-TYPE: extension
-# CC-NAME: helper
+# CC-TYPE:        extension
+# CC-NAME:        helper
+# CC-VERSION:     E0.1
 # CC-DESCRIPTION: Fuzzy-matching input hook that auto-corrects mistyped commands.
+# CC-REQUIREMENTS: none
 
 import utils
 from ui import C
 
+VERSION = "E0.1"
+
+
+# ---------------------------------------------------------------------------
+# Input hook
+# ---------------------------------------------------------------------------
 
 def on_input(line):
     """
@@ -39,10 +47,10 @@ def on_input(line):
         ]
 
         # Combine built-ins with any dynamically registered commands.
+        # 'console' is injected into this module's globals by the ExtensionHost.
         all_valid = built_ins + list(console.commands.keys()) + list(console.ext_cmds.keys())
     except NameError:
-        # 'console' is injected into this module's globals by the ExtensionHost.
-        # If it is absent we cannot perform any matching.
+        # If console is absent we cannot perform any matching.
         return line
 
     # If the command already matches exactly, leave the line unchanged.
@@ -69,6 +77,10 @@ def on_input(line):
     return line
 
 
+# ---------------------------------------------------------------------------
+# Internal helpers
+# ---------------------------------------------------------------------------
+
 def _levenshtein(s1, s2):
     """
     Compute the Levenshtein edit distance between two strings.
@@ -78,8 +90,7 @@ def _levenshtein(s1, s2):
         s2 (str): Second string.
 
     Returns:
-        int: The minimum number of single-character edits required to
-             transform s1 into s2.
+        int: Minimum single-character edits needed to transform s1 into s2.
     """
     if len(s1) < len(s2):
         return _levenshtein(s2, s1)
@@ -94,3 +105,12 @@ def _levenshtein(s1, s2):
         prev = curr
 
     return prev[-1]
+
+
+# ---------------------------------------------------------------------------
+# Lifecycle hooks
+# ---------------------------------------------------------------------------
+
+def on_startup(console):
+    """Print a confirmation message when this extension is loaded."""
+    print(f"  {C.SUCCESS}✓{C.RESET} Helper Extension v{VERSION} active.")
