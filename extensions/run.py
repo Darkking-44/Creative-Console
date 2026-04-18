@@ -226,21 +226,102 @@ def _run_py(path):
     return ""
 
 
+# Known OpenCL SDK include/lib locations on Windows (CUDA Toolkit, Intel, AMD).
+_OPENCL_INCLUDE_DIRS = [
+    r"C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.6\include",
+    r"C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.5\include",
+    r"C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.4\include",
+    r"C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.3\include",
+    r"C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.2\include",
+    r"C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.1\include",
+    r"C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.0\include",
+    r"C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v11.8\include",
+    r"C:\Program Files (x86)\Intel\OpenCL SDK\include",
+    r"C:\Program Files\Intel\OpenCL SDK\include",
+    r"C:\Program Files\OCL_SDK_Light\include",
+]
+_OPENCL_LIB_DIRS = [
+    r"C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.6\lib\x64",
+    r"C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.5\lib\x64",
+    r"C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.4\lib\x64",
+    r"C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.3\lib\x64",
+    r"C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.2\lib\x64",
+    r"C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.1\lib\x64",
+    r"C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.0\lib\x64",
+    r"C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v11.8\lib\x64",
+    r"C:\Program Files (x86)\Intel\OpenCL SDK\lib\x64",
+    r"C:\Program Files\Intel\OpenCL SDK\lib\x64",
+    r"C:\Program Files\OCL_SDK_Light\lib\x86_64",
+]
+
+
+def _find_opencl_flags():
+    """
+    Scan known SDK locations for OpenCL headers and libraries.
+
+    Returns:
+        tuple[list[str], list[str]] | None: (include_flags, lib_flags) to pass
+        to g++, or None if no OpenCL SDK could be located.
+    """
+    inc_flag = None
+    lib_flag = None
+
+    for d in _OPENCL_INCLUDE_DIRS:
+        if (Path(d) / "CL" / "cl.h").exists():
+            inc_flag = f"-I{d}"
+            break
+
+    for d in _OPENCL_LIB_DIRS:
+        if (Path(d) / "OpenCL.lib").exists() or (Path(d) / "libOpenCL.a").exists():
+            lib_flag = f"-L{d}"
+            break
+
+    if inc_flag and lib_flag:
+        return [inc_flag], [lib_flag, "-lOpenCL"]
+    return None
+
+
+def _is_opencl_source(path):
+    """Return True if the source file includes OpenCL headers."""
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+        return "#include" in text and "CL/cl" in text
+    except Exception:
+        return False
+
+
 def _run_cpp(path):
-    """Compile a C/C++ file with g++ and execute the resulting binary."""
-    binary = path.stem + (".exe" if platform.system() == "Windows" else "")
+    """
+    Compile a C/C++ file with g++ and execute the resulting binary.
+
+    If the source file uses OpenCL, known SDK locations are searched
+    automatically and the appropriate -I/-L/-lOpenCL flags are added.
+    """
+    binary = path.parent / (path.stem + (".exe" if platform.system() == "Windows" else ""))
+    extra_flags = []
+
+    if _is_opencl_source(path):
+        opencl = _find_opencl_flags()
+        if opencl is None:
+            return (
+                f"{C.ERROR}OpenCL header 'CL/cl.h' not found.\n"
+                f"  The OpenCL SDK is usually bundled with the CUDA Toolkit.\n"
+                f"  Download: https://developer.nvidia.com/cuda-downloads\n"
+                f"  Or the lightweight OCL-SDK: https://github.com/GPUOpen-LibrariesAndSDKs/OCL-SDK/releases{C.RESET}"
+            )
+        inc_flags, lib_flags = opencl
+        extra_flags = inc_flags + lib_flags
+        print(f"  {C.MUTED}OpenCL SDK detected — adding flags automatically.{C.RESET}")
+
+    cmd = ["g++", str(path), "-o", str(binary)] + extra_flags
 
     with Spinner(f"Compiling {path.name}"):
-        result = subprocess.run(
-            ["g++", str(path), "-o", binary],
-            capture_output=True, text=True
-        )
+        result = subprocess.run(cmd, capture_output=True, text=True)
 
     if result.returncode != 0:
         return f"{C.ERROR}Compilation failed:\n{result.stderr}{C.RESET}"
 
-    exec_cmd = [binary] if platform.system() == "Windows" else [f"./{binary}"]
-    subprocess.run(exec_cmd)
+    subprocess.run([str(binary.absolute())])
     return f"  {C.MUTED}--- Process finished ---{C.RESET}"
 
 
