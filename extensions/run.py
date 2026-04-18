@@ -1,6 +1,6 @@
 # CC-TYPE: extension
 # CC-NAME: run
-# CC-DESCRIPTION: Autonomous Runner v3.8.7. Fixes Unicode crashes and forces x64 VCVARS.
+# CC-DESCRIPTION: Autonomous Runner v3.8.8. Fixes NVCC German Regex Bug & Auto-Downloads OpenCL Headers.
 
 import os
 import subprocess
@@ -28,7 +28,6 @@ def _get_vcvars_path():
             res = subprocess.run([vswhere, "-latest", "-property", "installationPath"], capture_output=True, text=True, errors='replace')
             install_path = res.stdout.strip()
             if install_path:
-                # Switched to vcvarsall.bat (more reliable)
                 vcvars = Path(install_path) / "VC" / "Auxiliary" / "Build" / "vcvarsall.bat"
                 if vcvars.exists(): return str(vcvars)
         except: pass
@@ -62,6 +61,20 @@ def _download_with_progress(url, filename):
         print(f"\n  {C.ERROR}Download failed: {e}{C.RESET}")
         return None
 
+def _ensure_opencl_headers():
+    """Downloads official Khronos OpenCL headers for portable C++ compilation."""
+    h_dir = _get_bin_dir() / "OpenCL-Headers-main"
+    if not h_dir.exists():
+        print(f"  {C.WARN}OpenCL Headers missing. Downloading Khronos SDK...{C.RESET}")
+        url = "https://github.com/KhronosGroup/OpenCL-Headers/archive/refs/heads/main.zip"
+        zip_p = _download_with_progress(url, "cl_headers.zip")
+        if zip_p:
+            with Spinner("Extracting OpenCL Headers"):
+                with zipfile.ZipFile(zip_p, 'r') as z:
+                    z.extractall(_get_bin_dir())
+            os.remove(zip_p)
+    return str(h_dir)
+
 def handle_run(args, console):
     if not args: return f"{C.ERROR}Usage: run <filepath>{C.RESET}"
     _update_env_paths_internal()
@@ -70,21 +83,20 @@ def handle_run(args, console):
     if not file_path.exists(): return f"{C.ERROR}File not found.{C.RESET}"
     ext = file_path.suffix.lower()
 
-    if ext in [".cpp", ".c", ".cl"] and not shutil.which("g++"):
-        url = "https://github.com/skeeto/w64devkit/releases/download/v1.19.0/w64devkit-1.19.0.zip"
-        _download_and_extract(url, "w64devkit")
+    if ext in [".cpp", ".c", ".cl"]:
+        if not shutil.which("g++"):
+            url = "https://github.com/skeeto/w64devkit/releases/download/v1.19.0/w64devkit-1.19.0.zip"
+            print(f"  {C.WARN}W64DEVKIT setup starting. This happens only once!{C.RESET}")
+            zip_p = _download_with_progress(url, "w64devkit.zip")
+            if zip_p:
+                with Spinner("Extracting Toolchain"):
+                    with zipfile.ZipFile(zip_p, 'r') as z:
+                        z.extractall(_get_bin_dir())
+                os.remove(zip_p)
+        _ensure_opencl_headers() # Always ensure headers exist for C++
         
     _update_env_paths_internal()
     return _execute(file_path, ext)
-
-def _download_and_extract(url, name):
-    print(f"  {C.WARN}{name.upper()} setup starting. This happens only once!{C.RESET}")
-    zip_p = _download_with_progress(url, f"{name}.zip")
-    if zip_p:
-        with Spinner(f"Extracting {name}"):
-            with zipfile.ZipFile(zip_p, 'r') as z:
-                z.extractall(_get_bin_dir())
-        os.remove(zip_p)
 
 def _execute(p, ext):
     if ext == ".py": 
@@ -96,8 +108,15 @@ def _execute(p, ext):
     
     elif ext in [".cpp", ".c"]:
         out = p.with_suffix(".exe")
-        with Spinner("Compiling C++"):
-            res = subprocess.run(f'g++ "{p}" -o "{out}" -lOpenCL', shell=True, capture_output=True, text=True, errors='replace')
+        headers = _ensure_opencl_headers()
+        opencl_dll = r"C:\Windows\System32\OpenCL.dll"
+        
+        cmd = f'g++ "{p}" -o "{out}" -I"{headers}"'
+        if os.path.exists(opencl_dll):
+            cmd += f' "{opencl_dll}"' # Direct linking to system OpenCL driver
+            
+        with Spinner("Compiling C++ / OpenCL"):
+            res = subprocess.run(cmd, shell=True, capture_output=True, text=True, errors='replace')
         if res.returncode != 0: return f"{C.ERROR}C++ Error:{C.RESET}\n{res.stderr}"
         subprocess.run([str(out.absolute())], stdout=None, stderr=None)
     
@@ -109,13 +128,13 @@ def _execute(p, ext):
         try:
             with open(bat_file, "w", encoding="utf-8") as f:
                 f.write("@echo off\n")
-                f.write("chcp 65001 >nul\n") # Force Windows CMD to use UTF-8 (Fixes the crash)
+                f.write("set VSLANG=1033\n") # FIX: Force MSVC to English so NVCC understands "for x64"
+                f.write("chcp 65001 >nul\n")
                 if vcvars:
-                    f.write(f'call "{vcvars}" x64 >nul\n') # Safely load 64-bit environment
+                    f.write(f'call "{vcvars}" x64 >nul 2>&1\n')
                 f.write(f'nvcc -m64 "{p}" -o "{out}" -allow-unsupported-compiler\n')
             
             with Spinner("Compiling CUDA (GPU)"):
-                # Use utf-8 encoding and replace errors so python never crashes again
                 res = subprocess.run([str(bat_file)], capture_output=True, text=True, encoding='utf-8', errors='replace')
             
             if res.returncode != 0:
@@ -130,4 +149,4 @@ def _execute(p, ext):
 
 def on_startup(console):
     _update_env_paths_internal()
-    print(f"  {C.SUCCESS}Runner v3.8.7 (Encoding & x64 Fix) ready.{C.RESET}")
+    print(f"  {C.SUCCESS}Runner v3.8.8 (The Masterpiece) ready.{C.RESET}")
