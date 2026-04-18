@@ -62,7 +62,8 @@ def handle_run(args, console):
     ext = file_path.suffix.lower()
 
     # Ensure the required toolchain is present before attempting to compile.
-    _ensure_toolchain(ext)
+    if not _ensure_toolchain(ext):
+        return f"{C.WARN}Toolchain not ready. Follow the installer instructions and restart the console.{C.RESET}"
 
     dispatch = {
         ".py":   _run_py,
@@ -85,13 +86,56 @@ def handle_run(args, console):
 # Toolchain management
 # ---------------------------------------------------------------------------
 
+# Common MSYS2 installation prefixes on Windows.
+_MSYS2_PREFIXES = [
+    r"C:\msys64\ucrt64\bin",
+    r"C:\msys64\mingw64\bin",
+    r"C:\msys64\mingw32\bin",
+    r"C:\msys2\ucrt64\bin",
+    r"C:\msys2\mingw64\bin",
+]
+
+
+def _find_binary(name):
+    """
+    Locate a binary by name, checking PATH and known MSYS2 install locations.
+
+    Args:
+        name (str): Binary name (e.g. 'g++').
+
+    Returns:
+        str | None: Full path to the binary, or None if not found.
+    """
+    found = shutil.which(name)
+    if found:
+        return found
+
+    if platform.system() == "Windows":
+        import os
+        for prefix in _MSYS2_PREFIXES:
+            candidate = Path(prefix) / (name + ".exe")
+            if candidate.exists():
+                # Inject the directory into PATH for this process so subsequent
+                # calls (e.g. the actual subprocess.run) can find the binary too.
+                os.environ["PATH"] = prefix + os.pathsep + os.environ.get("PATH", "")
+                return str(candidate)
+
+    return None
+
+
 def _ensure_toolchain(ext):
     """
     Check whether the toolchain required for *ext* is available and, if not,
     trigger OS-appropriate installation.
 
+    Returns True if the toolchain is ready, False if the user needs to install
+    something first (in which case compilation should not be attempted).
+
     Args:
         ext (str): File extension including the leading dot (e.g. '.cpp').
+
+    Returns:
+        bool: True if the required toolchain is available, False otherwise.
     """
     checks = {
         ".c":    ("g++",         "g++"),
@@ -104,17 +148,18 @@ def _ensure_toolchain(ext):
 
     entry = checks.get(ext)
     if entry is None:
-        return  # No external toolchain required (e.g. Python).
+        return True  # No external toolchain required (e.g. Python).
 
     binary, tool_key = entry
 
-    if shutil.which(binary):
-        return  # Already installed.
+    if _find_binary(binary):
+        return True  # Already installed and locatable.
 
     if tool_key == "cuda" and not _has_nvidia_gpu():
-        return  # Let _run_cuda surface the missing-GPU error.
+        return True  # Let _run_cuda surface the missing-GPU error.
 
     _install_tool(tool_key)
+    return False  # Installer was launched; user must restart and retry.
 
 
 def _install_tool(tool):
@@ -163,7 +208,11 @@ def _install_tool(tool):
         cmd, use_shell = entry
         subprocess.run(cmd, shell=use_shell)
 
-    print(f"  {C.SUCCESS}→{C.RESET} Follow the installer instructions, then restart the console.")
+    print(
+        f"  {C.SUCCESS}→{C.RESET} Follow the installer instructions, then restart the console.\n"
+        f"  {C.MUTED}  Tip: After MSYS2 install, run this in the MSYS2 terminal:\n"
+        f"       pacman -S mingw-w64-ucrt-x86_64-gcc{C.RESET}"
+    )
 
 
 # ---------------------------------------------------------------------------
