@@ -1,75 +1,57 @@
 # CC-TYPE:        extension
 # CC-NAME:        clone
-# CC-VERSION:     E0.1
-# CC-DESCRIPTION: Console cloner — spawns a new instance of Creative Consol.
-# CC-REQUIREMENTS: none
+# CC-VERSION:     E0.2
+# CC-DESCRIPTION: Klont Repos und führt automatisch die launch.bat aus.
+# CC-REQUIREMENTS: 
 
-import sys
 import subprocess
+import shutil
 import os
-from ui import C
+from pathlib import Path
+from ui import C, Spinner
 
-VERSION = "E0.1"
-
-# ---------------------------------------------------------------------------
-# Command registration
-# ---------------------------------------------------------------------------
+VERSION = "E0.2"
 
 def provides_commands():
-    """Register the 'clone' command with the extension host."""
     return {
         "clone": {
             "handler": handle_clone,
-            "description": "Spawn a new console instance."
+            "description": "Klont ein Repo und startet die launch.bat"
         }
     }
 
-# ---------------------------------------------------------------------------
-# Command handler
-# ---------------------------------------------------------------------------
-
 def handle_clone(args, console):
-    """
-    Executes a new process of the current python script.
-    
-    This uses sys.executable and the path of the main script to ensure
-    the new window opens with the same environment.
-    """
-    
-    # Save current history to disk before cloning so the new instance 
-    # can load the full progress.
+    if not args:
+        return f"{C.ERROR}Usage: clone <repo_url>{C.RESET}"
+
+    if not shutil.which("git"):
+        return f"{C.ERROR}Git ist nicht installiert.{C.RESET}"
+
+    repo_url = args[0]
+    repo_name = repo_url.split("/")[-1].replace(".git", "")
+    target_dir = Path.cwd() / repo_name
+
+    # 1. Repository klonen
+    print(f"  {C.MUTED}Klone {repo_url}...{C.RESET}")
     try:
-        import readline
-        from utils import data_dir
-        hf = data_dir() / "history"
-        readline.write_history_file(str(hf))
-    except (ImportError, AttributeError):
-        pass
+        with Spinner(f"Cloning {repo_name}"):
+            subprocess.run(["git", "clone", repo_url], capture_output=True, check=True)
+        print(f"  {C.SUCCESS}Done: {repo_name} geklont.{C.RESET}")
+    except subprocess.CalledProcessError as e:
+        return f"{C.ERROR}Fehler beim Klonen: {e.stderr.decode().strip()}{C.RESET}"
 
-    print(f"  {C.MUTED}Cloning console instance...{C.RESET}")
-
-    # Identify the entry point (main.py)
-    main_script = sys.argv[0]
+    # 2. Prüfen ob launch.bat existiert und ausführen
+    batch_file = target_dir / "launch.bat"
     
-    # Platform specific terminal spawning
-    try:
-        if os.name == "nt":
-            # Windows: Spawn in a new cmd window
-            subprocess.Popen(["start", "cmd", "/K", sys.executable, main_script], shell=True)
-        else:
-            # Unix/Mac: Attempt to open a new terminal tab/window
-            # Note: This depends on the installed terminal emulator.
-            # Using a generic approach via python itself if no GUI terminal is found.
-            subprocess.Popen([sys.executable, main_script], start_new_session=True)
-            
-        return "New instance launched."
-    except Exception as e:
-        return f"Failed to clone: {str(e)}"
+    if batch_file.exists():
+        print(f"  {C.SUCCESS}Starte {batch_file.name}...{C.RESET}")
+        # Wechselt in den Ordner und startet die .bat in einem neuen Fenster
+        os.chdir(str(target_dir))
+        os.system(f"start launch.bat")
+    else:
+        print(f"  {C.WARN}Keine launch.bat in {repo_name} gefunden.{C.RESET}")
 
-# ---------------------------------------------------------------------------
-# Lifecycle hooks
-# ---------------------------------------------------------------------------
+    return ""
 
 def on_startup(console):
-    """Print confirmation message when extension is loaded."""
-    print(f"  {C.SUCCESS}✓{C.RESET} Clone Extension v{VERSION} active.")
+    print(f"  {C.SUCCESS}✓{C.RESET} Clone & Launch Extension aktiv.")
