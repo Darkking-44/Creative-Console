@@ -1,51 +1,32 @@
-import subprocess
-import shutil
 import os
 from pathlib import Path
-from ui import C, Spinner
+from ui import C
 
 VERSION = "E0.2.1"
 
 def provides_commands():
     return {
-        "clone": {
-            "handler": handle_clone,
-            "description": "Klont ein Repo und startet die launch.bat im Parent-Ordner"
+        "clone": {  # Ich lasse den Namen 'clone', damit dein gewohnter Befehl bleibt
+            "handler": handle_launch,
+            "description": "Startet die launch.bat im Parent-Ordner"
         }
     }
 
-def handle_clone(args, console):
-    if not args:
-        return f"{C.ERROR}Usage: clone <repo_url>{C.RESET}"
-
-    if not shutil.which("git"):
-        return f"{C.ERROR}Git ist nicht installiert.{C.RESET}"
-
-    repo_url = args[0]
-    repo_name = repo_url.split("/")[-1].replace(".git", "")
+def handle_launch(args, console):
+    # Wir ignorieren 'args' jetzt einfach, da du keine URL brauchst
     
-    # 1. Repository klonen
-    print(f"  {C.MUTED}Klone {repo_url}...{C.RESET}")
-    try:
-        with Spinner(f"Cloning {repo_name}"):
-            # Wir klonen ganz normal in den aktuellen Ordner
-            subprocess.run(["git", "clone", repo_url], capture_output=True, check=True)
-        print(f"  {C.SUCCESS}Done: {repo_name} geklont.{C.RESET}")
-    except subprocess.CalledProcessError as e:
-        return f"{C.ERROR}Fehler beim Klonen: {e.stderr.decode().strip()}{C.RESET}"
-
-    # 2. Pfad zur launch.bat im ÜBERGEORDNETEN Verzeichnis festlegen
-    # Path.cwd().parent entspricht "../"
+    # Pfad zur launch.bat im ÜBERGEORDNETEN Verzeichnis
     parent_launch_bat = Path.cwd().parent / "launch.bat"
 
     if parent_launch_bat.exists():
-        print(f"  {C.SUCCESS}Starte {parent_launch_bat}...{C.RESET}")
-        # Startet die Batch-Datei im Kontext des übergeordneten Ordners
+        print(f"  {C.SUCCESS}Starte {parent_launch_bat.name}...{C.RESET}")
+        
+        # Startet die Batch-Datei
+        # 'start' öffnet ein neues CMD-Fenster
         os.system(f'start "" "{parent_launch_bat}"')
+        return f"{C.SUCCESS}Launch-Befehl gesendet.{C.RESET}"
     else:
-        print(f"  {C.WARN}Keine launch.bat in {parent_launch_bat.parent} gefunden.{C.RESET}")
-
-    return ""
+        return f"{C.ERROR}Fehler: Keine launch.bat in {parent_launch_bat.parent} gefunden.{C.RESET}"
 
 def on_startup(console):
-    print(f"  {C.SUCCESS}✓{C.RESET} Clone & Parent-Launch Extension aktiv.")
+    print(f"  {C.SUCCESS}✓{C.RESET} Quick-Launch Extension aktiv (Befehl: clone).")
