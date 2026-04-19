@@ -2,31 +2,29 @@ import os
 from pathlib import Path
 from ui import C
 
-VERSION = "E0.2.1"
+VERSION = "E0.3"
 
 def provides_commands():
     return {
-        "clone": {  # Ich lasse den Namen 'clone', damit dein gewohnter Befehl bleibt
-            "handler": handle_launch,
-            "description": "Startet die launch.bat im Parent-Ordner"
+        "clone": {
+            "handler": handle_instance_clone,
+            "description": "Clones the instance by running launch.bat from the parent directory"
         }
     }
 
-def handle_launch(args, console):
-    # Wir ignorieren 'args' jetzt einfach, da du keine URL brauchst
-    
-    # Pfad zur launch.bat im ÜBERGEORDNETEN Verzeichnis
+def handle_instance_clone(args, console):
+    # Locate launch.bat in the directory above
     parent_launch_bat = Path.cwd().parent / "launch.bat"
 
     if parent_launch_bat.exists():
-        print(f"  {C.SUCCESS}Starte {parent_launch_bat.name}...{C.RESET}")
+        print(f"  {C.SUCCESS}Cloning instance...{C.RESET}")
         
-        # Startet die Batch-Datei
-        # 'start' öffnet ein neues CMD-Fenster
+        # 'start' launches the file in a NEW window.
+        # This ensures the current console stays exactly where it is.
         os.system(f'start "" "{parent_launch_bat}"')
-        return f"{C.SUCCESS}Launch-Befehl gesendet.{C.RESET}"
+        return ""
     else:
-        return f"{C.ERROR}Fehler: Keine launch.bat in {parent_launch_bat.parent} gefunden.{C.RESET}"
+        return f"{C.ERROR}Error: launch.bat not found at {parent_launch_bat}{C.RESET}"
 
 def on_startup(console):
-    print(f"  {C.SUCCESS}✓{C.RESET} Quick-Launch Extension aktiv (Befehl: clone).")
+    print(f"  {C.SUCCESS}✓{C.RESET} Instance-Clone Extension active. Type 'clone' to spawn a new window.")
